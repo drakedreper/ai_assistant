@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI CV Assistant · Sigurd Tenfjord</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <p class="brand-kicker">CV workspace</p>
+          <h1>Sigurd · AI CV Assistant</h1>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span id="aiStatus" class="status-pill" data-state="unknown">Checking AI…</span>
+        <button type="button" id="btnSave" class="btn primary">Save version</button>
+        <a class="btn ghost" href="/api/export/html" download>Export HTML</a>
+        <a class="btn ghost" href="/api/export/markdown" download>Export MD</a>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="panel editor-panel">
+        <div class="panel-head">
+          <h2>Markdown source</h2>
+          <label class="import-btn btn subtle">
+            Import CV
+            <input id="fileImport" type="file" accept=".md,.markdown,.txt,.html,.htm" hidden />
+          </label>
+        </div>
+        <textarea id="editor" spellcheck="true" aria-label="CV markdown editor"></textarea>
+        <p class="hint">Markdown is the source of truth. Every save and AI edit creates an archived version.</p>
+      </section>
+
+      <section class="panel preview-panel">
+        <div class="panel-head">
+          <h2>Preview</h2>
+          <div class="seg">
+            <button type="button" class="seg-btn active" data-view="preview">Rendered</button>
+            <button type="button" class="seg-btn" data-view="versions">History</button>
+          </div>
+        </div>
+        <div id="previewFrame" class="preview-frame"></div>
+        <div id="versionsPane" class="versions-pane hidden"></div>
+      </section>
+
+      <section class="panel chat-panel">
+        <div class="panel-head">
+          <h2>Assistant</h2>
+          <button type="button" id="btnClearChat" class="btn subtle">Clear</button>
+        </div>
+        <div id="chatLog" class="chat-log" aria-live="polite"></div>
+        <form id="chatForm" class="chat-form">
+          <textarea id="chatInput" rows="3" placeholder="e.g. Add AI Transformation Leader cert, tighten Vivicta bullets, tailor for a Dynamics 365 CE role…"></textarea>
+          <div class="chat-actions">
+            <label class="check">
+              <input type="checkbox" id="applyEdits" checked />
+              Apply edits to CV
+            </label>
+            <button type="submit" class="btn primary">Send</button>
+          </div>
+        </form>
+        <div class="quick-prompts">
+          <button type="button" data-prompt="Review my CV and suggest the top 5 improvements without rewriting yet.">Review</button>
+          <button type="button" data-prompt="Tighten the Experience bullets to be more outcome-focused. Keep all employers and dates.">Tighten bullets</button>
+          <button type="button" data-prompt="Rewrite the profile summary for a Microsoft Dynamics 365 / Power Platform consulting audience.">D365 summary</button>
+          <button type="button" data-prompt="Add certification: Microsoft Certified: AI Transformation Leader (Feb 2026) if missing.">Add AI cert</button>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

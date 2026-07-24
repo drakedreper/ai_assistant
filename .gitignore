@@ -19,6 +19,26 @@
 *.tar.gz
 *.rar
 
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+# virtual machine crash logs
 hs_err_pid*
 replay_pid*
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# App local state
+.env
+data/assistant.db
+data/uploads/*
+!data/uploads/.gitkeep
+data/cv/archive/*
+!data/cv/archive/.gitkeep
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
