@@ -38,6 +38,9 @@ data/uploads/*
 data/cv/archive/*
 !data/cv/archive/.gitkeep
 
+# Local working docs (may contain customer content)
+data/General/
+
 # OS / IDE
 .DS_Store
 .idea/
