@@ -41,3 +41,7 @@ The current room is a three.js scene in the browser. It stays as a draft stage, 
 - Unity vs Unreal after seeing the references and a spike on the RTX 5070 Ti.
 - Does the stage run in its own window, or must the render appear inside the dashboard's Room panel (Pixel Streaming on Unreal)?
 - Whether Audio2Face-3D licence terms suit the intended use.
+
+## Update 2026-10-31: references and the cerebral space
+
+The user supplied six reference screenshots (a character creator stage, with DLSS visible) and a brief: an empty "cerebral space" where a representation of the user and the second brain live, connected to the terminal; a character that is athletic and intelligent, meeting in authority. The concept, the art direction read from the references and the mapping from app data to space objects are in [docs/CEREBRAL-SPACE.md](../CEREBRAL-SPACE.md). The contract gained `DataConstruct` (knowledge graph, session orbit, terminal pane and others), `Atmosphere` (the void look), a `user` character role and `PresenceStyle`. The references look like an Unreal-class pipeline, which strengthens the Unreal recommendation, but the decision still waits for a spike on the RTX 5070 Ti.

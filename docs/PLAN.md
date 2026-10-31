@@ -223,3 +223,5 @@ Revised order of work:
 | 4 | Realism: character-creation pipeline (MetaHuman / Character Creator class), strand hair, cloth, Audio2Face-3D, expressive voice |
 
 What the user must do for tests on their PC: connect it through Remote Control (Claude Desktop app, Settings, Claude Code, Remote Control, or `claude remote-control` in a terminal in the repo folder). Then the spikes in `spikes/` and the GPU/engine measurements can run on the RTX 5070 Ti.
+
+The long-term interface is the cerebral space described in [CEREBRAL-SPACE.md](CEREBRAL-SPACE.md): an empty void where the user's representation and the second brain live, with the knowledge graph, Claude sessions and an interactive terminal as objects in it.

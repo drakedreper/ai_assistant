@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildSnapshot } from '../src/fixtures'
-import { ARKIT_52, Snapshot, StageCommand, TOOL_SURFACE } from '../src'
+import { ARKIT_52, AUTHORITY_PRESENCE, PresenceStyle, Snapshot, StageCommand, StageEvent, TOOL_SURFACE } from '../src'
 
 const snap = buildSnapshot(new Date('2026-11-02T08:15:00'))
 
@@ -96,5 +96,20 @@ describe('fixtures', () => {
       audio: { format: 'pcm_s16le', sampleRate: 24000, channels: 1 }, faceSource: 'stage',
     })
     expect(r.success).toBe(true)
+  })
+
+  it('stage protocol: cerebral-space constructs, terminal bytes and the authority presence parse', () => {
+    const transform = { position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] }
+    expect(StageCommand.safeParse({
+      id: 'c2', type: 'scene.construct', op: 'add',
+      construct: { id: 'brain', kind: 'knowledge_graph', transform, source: 'brain' },
+    }).success).toBe(true)
+    expect(StageCommand.safeParse({
+      id: 'c3', type: 'scene.data', constructId: 'brain', nodes: [{ id: 'n1', label: 'Q4 positioning', layer: 'strategy', importance: 5, position: [1, 2, 3] }], edges: [{ from: 'n1', to: 'n2' }],
+    }).success).toBe(true)
+    expect(StageCommand.safeParse({ id: 'c4', type: 'construct.terminal.write', constructId: 't1', data: '\u001b[32mok\u001b[0m' }).success).toBe(true)
+    expect(StageEvent.safeParse({ type: 'construct.terminal.input', constructId: 't1', data: 'ls\r' }).success).toBe(true)
+    expect(PresenceStyle.safeParse(AUTHORITY_PRESENCE).success).toBe(true)
+    expect(AUTHORITY_PRESENCE.baseline.dominance).toBeGreaterThan(0.5)
   })
 })

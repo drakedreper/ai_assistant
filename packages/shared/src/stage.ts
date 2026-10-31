@@ -50,6 +50,10 @@ export const StageCapabilities = z.object({
     /** Frames can be streamed into the dashboard's Room window (Pixel Streaming 2 or equivalent). */
     embeddedStream: z.boolean(),
   }),
+  /** The stage can track the user (webcam) to drive the user's avatar and report presence. Never sends images. */
+  tracking: z.object({ face: z.boolean(), body: z.boolean() }).default({ face: false, body: false }),
+  /** Data constructs the stage can draw in the space (see ConstructKind). */
+  constructs: z.array(z.string()).default([]),
   maxCharacters: z.number().int().positive(),
 })
 export type StageCapabilities = z.infer<typeof StageCapabilities>
@@ -181,8 +185,41 @@ export const OutfitPreset = z.object({
 })
 export type OutfitPreset = z.infer<typeof OutfitPreset>
 
+/**
+ * How a character carries herself. The behaviour director reads it, so the same words and emotions look different
+ * on different people. "Athletic and intelligent, meeting in authority" is: upright and balanced, economical in
+ * gesture, long steady gaze, measured pace, high dominance with low arousal. Values are 0..1.
+ */
+export const PresenceStyle = z.object({
+  /** 0 = relaxed/slouched, 1 = rigidly upright. Authority sits around 0.7-0.85. */
+  uprightness: z.number().min(0).max(1),
+  /** 0 = expressive and busy, 1 = very economical. Fewer, deliberate gestures read as authority. */
+  gestureEconomy: z.number().min(0).max(1),
+  /** How long gaze is held before a natural break. */
+  gazeHold: z.number().min(0).max(1),
+  /** 0 = quick and energetic, 1 = slow and measured. */
+  pace: z.number().min(0).max(1),
+  /** Athletic bearing: balanced weight, grounded stance, controlled movement. */
+  athleticism: z.number().min(0).max(1),
+  /** Baseline mood the MoodEngine decays toward (valence, arousal, dominance in -1..1). */
+  baseline: z.object({ valence: z.number().min(-1).max(1), arousal: z.number().min(-1).max(1), dominance: z.number().min(-1).max(1) }),
+})
+export type PresenceStyle = z.infer<typeof PresenceStyle>
+
+/** "authority": the user's brief for the long-term assistant. Used as the default for new assistant characters. */
+export const AUTHORITY_PRESENCE: PresenceStyle = {
+  uprightness: 0.8,
+  gestureEconomy: 0.75,
+  gazeHold: 0.8,
+  pace: 0.65,
+  athleticism: 0.8,
+  baseline: { valence: 0.2, arousal: -0.1, dominance: 0.7 },
+}
+
 export const CharacterProfile = z.object({
   id: z.string(),
+  /** 'assistant' is the second brain's embodiment; 'user' is the representation of the user in the space. */
+  role: z.enum(['assistant', 'user']).default('assistant'),
   name: z.string(),
   /** Base body/face asset (kind character_base). */
   baseAssetId: z.string(),
@@ -192,6 +229,7 @@ export const CharacterProfile = z.object({
   equipped: Equipped,
   presets: z.array(OutfitPreset).default([]),
   voice: VoiceProfile,
+  presence: PresenceStyle.default(AUTHORITY_PRESENCE),
   /** The persona (personality, boundaries) is stored in settings; the character is just her body and voice. */
   personaId: z.string().default('default'),
   /** Where this character prefers to be (an anchor in the current scene), e.g. "desk_chair". */
@@ -246,20 +284,88 @@ export const CameraShot = z.object({
 })
 export type CameraShot = z.infer<typeof CameraShot>
 
+/**
+ * The look of an empty "cerebral space": a dark void, volumetric fog, one soft pool of light on the floor,
+ * drifting dust motes and a heavy vignette (see docs/CEREBRAL-SPACE.md).
+ */
+export const Atmosphere = z.object({
+  ground: z.enum(['void', 'reflective', 'grid']).default('void'),
+  fogColor: z.string().default('#0a1a3a'),
+  fogDensity: z.number().min(0).max(1).default(0.55),
+  /** Light shafts and soft volumetric glow. */
+  volumetrics: z.boolean().default(true),
+  dustMotes: z.number().min(0).max(1).default(0.35),
+  /** The lit pool of floor under the character. */
+  floorPool: z.object({ radius: z.number().default(2.2), intensity: z.number().default(1), color: z.string().default('#cfe3ff') }).default({ radius: 2.2, intensity: 1, color: '#cfe3ff' }),
+  vignette: z.number().min(0).max(1).default(0.7),
+  bloom: z.number().min(0).max(1).default(0.35),
+})
+export type Atmosphere = z.infer<typeof Atmosphere>
+
 export const LightingPreset = z.object({
   id: z.string(),
   name: z.string(),
   /** 'clock' derives sun/moon from the real time and weather; 'fixed' uses the named look. */
   mode: z.enum(['clock', 'fixed']),
-  look: z.enum(['day', 'golden', 'dusk', 'night', 'studio', 'neon']).optional(),
+  look: z.enum(['day', 'golden', 'dusk', 'night', 'studio', 'neon', 'void']).optional(),
+  atmosphere: Atmosphere.optional(),
 })
 export type LightingPreset = z.infer<typeof LightingPreset>
+
+/**
+ * A data construct is something the stage DRAWS from live data, not a mesh the user placed: the second brain as a
+ * 3D knowledge constellation, Claude sessions as agents orbiting a project, a terminal as a pane in space.
+ * The backend computes layout and pushes data; the stage renders it and reports clicks. This is how the
+ * dashboards become places in the cerebral space.
+ */
+export const ConstructKind = z.enum([
+  'knowledge_graph', // notes as nodes, wikilinks as edges, layers as depth
+  'session_orbit', // Claude sessions and subagents as bodies orbiting their project
+  'project_cluster', // projects as structures with their tasks
+  'timeline_ribbon', // calendar and journal as a ribbon through time
+  'terminal_pane', // an interactive terminal (claude or a shell) as a pane
+  'mail_stream',
+  'finance_pulse',
+])
+export type ConstructKind = z.infer<typeof ConstructKind>
+
+export const DataConstruct = z.object({
+  id: z.string(),
+  kind: ConstructKind,
+  transform: Transform,
+  source: z.enum(['brain', 'work', 'life', 'money', 'world', 'terminal']),
+  /** Source-specific filter, e.g. { layer: "strategy" } or { terminalId: "t1" }. */
+  query: z.record(z.string(), z.unknown()).default({}),
+  style: z
+    .object({
+      palette: z.enum(['cool', 'warm', 'mono']).default('cool'),
+      density: z.number().min(0).max(1).default(0.5),
+      scale: z.number().positive().default(1),
+    })
+    .default({ palette: 'cool', density: 0.5, scale: 1 }),
+  interactive: z.boolean().default(true),
+})
+export type DataConstruct = z.infer<typeof DataConstruct>
+
+export const GraphNode = z.object({
+  id: z.string(),
+  label: z.string(),
+  layer: z.enum(['core', 'strategy', 'episodic', 'semantic', 'project', 'inbox']).optional(),
+  importance: z.number().int().min(1).max(5).default(2),
+  /** Layout computed by the backend so every engine draws the same constellation. */
+  position: Vec3.optional(),
+  color: z.string().optional(),
+})
+export const GraphEdge = z.object({ from: z.string(), to: z.string(), weight: z.number().default(1) })
+export type GraphNode = z.infer<typeof GraphNode>
+export type GraphEdge = z.infer<typeof GraphEdge>
 
 export const Scene = z.object({
   id: z.string(),
   name: z.string(),
   environmentAssetId: z.string(),
   objects: z.array(SceneObject),
+  constructs: z.array(DataConstruct).default([]),
   cameras: z.array(CameraShot),
   activeCameraId: z.string(),
   lighting: LightingPreset,
@@ -301,7 +407,13 @@ export type Posture = z.infer<typeof Posture>
 // Commands: backend -> stage
 // ---------------------------------------------------------------------------------------------------------------
 
-const cmdBase = { id: z.string(), /** Stage-clock time the command should take effect; omitted = now. */ atMs: z.number().optional() }
+const cmdBase = {
+  id: z.string(),
+  /** Stage-clock time the command should take effect; omitted = now. */
+  atMs: z.number().optional(),
+  /** Which character this applies to. Omitted = the assistant character. */
+  characterId: z.string().optional(),
+}
 
 export const StageCommand = z.discriminatedUnion('type', [
   // --- loading and look ---
@@ -311,6 +423,19 @@ export const StageCommand = z.discriminatedUnion('type', [
   z.object({ ...cmdBase, type: z.literal('character.outfit'), characterId: z.string(), preset: OutfitPreset, assets: z.array(Asset) }),
   z.object({ ...cmdBase, type: z.literal('scene.load'), scene: Scene, assets: z.array(Asset) }),
   z.object({ ...cmdBase, type: z.literal('scene.object'), op: z.enum(['add', 'update', 'remove']), object: SceneObject, asset: Asset.optional() }),
+  z.object({ ...cmdBase, type: z.literal('scene.construct'), op: z.enum(['add', 'update', 'remove']), construct: DataConstruct }),
+  /** Push data into a construct. 'replace' swaps everything, 'merge' upserts by id. */
+  z.object({
+    ...cmdBase,
+    type: z.literal('scene.data'),
+    constructId: z.string(),
+    mode: z.enum(['replace', 'merge']).default('merge'),
+    nodes: z.array(GraphNode).optional(),
+    edges: z.array(GraphEdge).optional(),
+    items: z.array(z.record(z.string(), z.unknown())).optional(),
+  }),
+  /** Terminal bytes (ANSI) from the daemon's PTY for a terminal_pane construct. */
+  z.object({ ...cmdBase, type: z.literal('construct.terminal.write'), constructId: z.string(), data: z.string() }),
   z.object({ ...cmdBase, type: z.literal('scene.camera'), cameraId: z.string(), blendMs: z.number().default(600) }),
   z.object({ ...cmdBase, type: z.literal('scene.lighting'), lighting: LightingPreset }),
 
@@ -355,6 +480,10 @@ export const StageEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('object.clicked'), objectId: z.string(), button: z.enum(['primary', 'secondary']).default('primary') }),
   /** The user interacted with the character directly. Region-level only; the backend applies her boundaries. */
   z.object({ type: z.literal('character.interact'), characterId: z.string(), region: z.enum(['head', 'hand', 'shoulder', 'body']), kind: z.enum(['click', 'drag', 'wave']) }),
+  z.object({ type: z.literal('construct.clicked'), constructId: z.string(), itemId: z.string().optional() }),
+  /** Keystrokes typed into a focused terminal_pane. The daemon forwards them to the PTY after its own checks. */
+  z.object({ type: z.literal('construct.terminal.input'), constructId: z.string(), data: z.string() }),
+  z.object({ type: z.literal('construct.terminal.resize'), constructId: z.string(), cols: z.number().int(), rows: z.number().int() }),
   z.object({ type: z.literal('perf'), fps: z.number(), gpuMs: z.number(), vramMb: z.number() }),
   z.object({ type: z.literal('error'), message: z.string(), fatal: z.boolean().default(false) }),
 ])
