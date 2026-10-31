@@ -29,6 +29,8 @@
   --shadow-panel: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 12px 32px -12px rgb(0 0 0 / 0.6);
 }
 
+/* Deliberately a single dark look. Declared on :root so native controls and scrollbars follow it. */
+:root { color-scheme: dark; }
 html, body, #root { height: 100%; }
 body {
   margin: 0;
@@ -79,4 +81,23 @@ body {
   user-select: none;
   pointer-events: none;
   transition: filter 0.2s ease;
+}
+
+/* Below tablet width the layout (rail + room + stage) cannot work, so say so plainly instead of breaking. */
+.small-screen-notice { display: none; }
+@media (max-width: 767px) {
+  #root { display: none; }
+  .small-screen-notice {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    padding-block: 24px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    text-align: center;
+    background: var(--color-canvas);
+    color: var(--color-fg);
+  }
+  .small-screen-notice h1 { margin: 0 0 8px; font-size: 18px; font-weight: 600; text-wrap: balance; }
+  .small-screen-notice p { margin: 0 auto; max-width: 34ch; font-size: 14px; color: var(--color-muted); }
 }
