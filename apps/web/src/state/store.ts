@@ -1,5 +1,6 @@
 import type {
   AssistantState,
+  ConnectionState,
   AvatarEvent,
   Emotion,
   ServerEvent,
@@ -29,6 +30,8 @@ export interface ViewParams {
 export interface AppState {
   ready: boolean
   data: Snapshot | null
+  /** Link to whatever serves the data (the daemon). The fixture client is always online. */
+  connection: ConnectionState
   /** Ticks every 30 s so relative times and day/night stay fresh. */
   now: Date
 
@@ -91,6 +94,7 @@ function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
 export const useStore = create<AppState>((set, get) => ({
   ready: false,
   data: null,
+  connection: 'online',
   now: new Date(),
 
   view: 'today',
@@ -119,6 +123,7 @@ export const useStore = create<AppState>((set, get) => ({
       asleep: isQuietNow(new Date(), data.settings.persona.quietHours),
     })
     api.subscribe((e) => get().applyEvent(e))
+    api.onConnection?.((connection) => set({ connection }))
     // Keep "now" (and everything relative to it) fresh.
     setInterval(() => set({ now: new Date() }), 30_000)
   })()),
@@ -202,6 +207,8 @@ export const useStore = create<AppState>((set, get) => ({
           return { data: { ...d, settings: e.settings } }
         case 'learned.update':
           return { data: { ...d, learned: e.learned } }
+        case 'snapshot.reset':
+          return { data: e.snapshot, now: new Date(e.snapshot.now) }
         default:
           return s
       }

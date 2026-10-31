@@ -20,6 +20,8 @@ import { WorldSnapshot } from './world'
 /** Everything the UI needs to render, in one object. The daemon's GET /snapshot returns exactly this. */
 export const Snapshot = z.object({
   now: IsoDateTime,
+  /** Sequence number of the last event already reflected in this snapshot, so a refetch lines up with the event stream. */
+  seq: z.number().int().nonnegative().optional(),
   briefing: Briefing,
   learned: z.array(LearnedFact),
   chat: z.array(ChatMessage),
@@ -71,10 +73,15 @@ export const ServerEvent = z.discriminatedUnion('type', [
   z.object({ ...base, type: z.literal('proposal.update'), proposal: Proposal }),
   z.object({ ...base, type: z.literal('settings.update'), settings: SettingsSnapshot }),
   z.object({ ...base, type: z.literal('learned.update'), learned: z.array(LearnedFact) }),
+  /** The client refetched the snapshot (reconnect after sleep, daemon restart, sequence gap). Replace everything. */
+  z.object({ ...base, type: z.literal('snapshot.reset'), snapshot: Snapshot }),
 ])
 export type ServerEvent = z.infer<typeof ServerEvent>
 
 export type Unsubscribe = () => void
+
+/** Link state between the UI and whatever serves it. The fixture client is always 'online'. */
+export type ConnectionState = 'connecting' | 'online' | 'offline'
 
 /**
  * The only surface the UI talks to. The mockup implements it with an in-memory FixtureClient;
@@ -83,6 +90,8 @@ export type Unsubscribe = () => void
 export interface ApiClient {
   getSnapshot(): Promise<Snapshot>
   subscribe(handler: (event: ServerEvent) => void): Unsubscribe
+  /** Optional: report connection state changes (the daemon client does; the fixture client does not need to). */
+  onConnection?(handler: (state: ConnectionState) => void): Unsubscribe
 
   sendChat(text: string, modality?: 'text' | 'voice'): Promise<void>
   /** Barge-in: stop the current reply. */

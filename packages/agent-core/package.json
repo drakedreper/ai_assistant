@@ -1,0 +1,15 @@
+{
+  "name": "@ai-assistant/agent-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Claude lanes for the assistant: backends (fake + Agent SDK), the Secretary lane, emotion-tag parsing, permission broker, budget guard. Pure logic, no HTTP, no database.",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc -p tsconfig.json", "test": "vitest run" },
+  "dependencies": {
+    "@ai-assistant/shared": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "0.3.316",
+    "zod": "catalog:"
+  },
+  "devDependencies": { "@types/node": "catalog:", "typescript": "catalog:", "vitest": "catalog:" }
+}

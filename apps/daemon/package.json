@@ -1,0 +1,31 @@
+{
+  "name": "@ai-assistant/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local daemon: loopback HTTP + WebSocket gateway, Claude Code hook receiver, SQLite store, agent host.",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "hooks": "tsx src/cli/hooks.ts"
+  },
+  "dependencies": {
+    "@ai-assistant/agent-core": "workspace:*",
+    "@ai-assistant/shared": "workspace:*",
+    "@hono/node-server": "^2.1.5",
+    "better-sqlite3": "^13.0.3",
+    "hono": "^4.7.0",
+    "ws": "^8.18.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "catalog:",
+    "@types/ws": "^8.18.0",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
