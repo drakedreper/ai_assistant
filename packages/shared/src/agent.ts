@@ -24,7 +24,22 @@ export interface TokenUsage {
   cacheCreate?: number
 }
 
-/** What a backend reports while a turn runs. The lane turns these into chat parts, avatar events and approvals. */
+/** Why a backend failed. Lets the lane pick a friendly message and decide whether restarting can help. */
+export type BackendErrorKind =
+  | 'refusal'
+  | 'auth'
+  | 'billing'
+  | 'budget'
+  | 'rate_limit'
+  | 'overloaded'
+  | 'invalid_request'
+  | 'process'
+  | 'unknown'
+
+/**
+ * What a backend reports while a turn runs. The lane turns these into chat parts, avatar events and approvals.
+ * Every turn ends with exactly ONE terminal event: `turn_end` or `error` (an `error` carries any cost it incurred).
+ */
 export type BackendEvent =
   /** The backend's own session id; persist it so the lane can resume after a restart. */
   | { type: 'session'; sessionId: string }
@@ -35,11 +50,17 @@ export type BackendEvent =
   /** The backend needs a human decision before running a tool (SDK canUseTool). Answer with resolvePermission. */
   | { type: 'permission_request'; requestId: string; tool: string; input: unknown; title?: string; description?: string }
   | { type: 'turn_end'; costUsd?: number; usage?: TokenUsage; interrupted?: boolean }
-  | { type: 'error'; message: string; retryable: boolean }
+  | { type: 'error'; message: string; retryable: boolean; kind?: BackendErrorKind; costUsd?: number; usage?: TokenUsage }
 
 export interface UserTurn {
   text: string
   modality: 'text' | 'voice'
+  /**
+   * App-generated context for THIS turn (today's date, time of day, a digest of earlier chat when the backend
+   * session could not be resumed). Backends deliver it before the user's text as a clearly labelled block that is
+   * not part of what the user said. Kept out of the system prompt so that prompt stays byte-stable for caching.
+   */
+  context?: string
   /** Webcam snapshots etc. Only sent when the user explicitly shares one. */
   images?: Array<{ mediaType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'; dataBase64: string }>
 }
@@ -68,6 +89,11 @@ export interface OpenSessionOptions {
   /** Resume a previous backend session. */
   resumeSessionId?: string
   tools: ToolBinding[]
+  /**
+   * Names (ToolSpec.name) of the `tools` that run WITHOUT asking (pre-approved). Every other tool in `tools` goes
+   * through permission_request/resolvePermission. When omitted, backends pre-approve tier T0 and T1 only.
+   */
+  autoAllow?: string[]
   /** Hard cap for this session, enforced by the backend when it can. */
   maxBudgetUsd?: number
   authMode: 'api-key' | 'local-login'

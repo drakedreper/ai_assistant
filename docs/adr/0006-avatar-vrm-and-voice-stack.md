@@ -86,3 +86,7 @@ A turn that calls tools can run 5 to 30 s, so it needs masking: `thinking` on VA
 - https://www.live2d.com/en/sdk/license/ (search excerpts only; page unreachable)
 - https://genies.com/blog/ready-player-me-shutdown
 - https://humannessindex.vapi.ai/models/elevenlabs-flash-v2-5
+
+## Update 2026-10-31
+
+The avatar renderer is no longer assumed to be three.js in the browser. See [ADR 0008](0008-stage-protocol-and-engine-choice.md): the backend owns the character and talks to a replaceable "stage" (Unreal, Unity, the web room, or a simulator) through the `mira-stage/1` protocol. The three-vrm room stays as a draft stage. The voice stack decisions in this ADR still apply.

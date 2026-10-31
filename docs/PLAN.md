@@ -207,3 +207,19 @@ Unverified in research (the sandbox could not reach several hosts): Google OAuth
 2. `pnpm dev` and a Playwright run at 1920x1080 and 1366x768: no console errors; the Her-space column is about 25% of the width; room modes and presets switch; approval cards update the queue; kanban drag works; wikilink navigation works.
 3. `pnpm test` validates fixtures against the zod schemas and checks cross-references.
 4. The lead commits and pushes; no pull request unless the user asks. A private single-file copy of the mockup can be offered for clicking through without installing anything.
+
+## Direction update (2026-10-31, after the user reviewed the mockup)
+
+User feedback, in their words summarised: the mockup screens are good and stay as a **draft**; stop investing in environment visuals; put the effort into a **backend for a live 3D assistant** with persistent memory, character selection, clothing selection and a scene the user can furnish ("VTube Studio, but in 3D"); the human must feel maximally alive; the final target is on the level of the AION 2 character creator; Unity or Unreal for the 3D; VTuber-class models are fine for the draft; reference material will follow. Also: use the Claude subscription **or** an API key; embed terminal access in the app, or control the PC through something like Desktop Commander; Google plugins (Calendar, Gmail) and the Secondbrain app via plugins or Google login. The user has a Windows PC with an RTX 5070 Ti and is willing to have tests run there.
+
+Revised order of work:
+
+| Phase | Scope |
+|---|---|
+| 1 (done or in progress) | Local daemon, Secretary lane (fake + Agent SDK backends), hook monitor, web DaemonClient, e2e test |
+| 1.5 | Embedded terminal (the user's own `claude` binary in a PTY, signed in by the user, observed by our hooks); integrations hub: external tool servers (Desktop Commander for PC control, Google Calendar and Gmail via claude.ai connectors under subscription login or direct OAuth under an API key, the Secondbrain app) with every outward action on an approval card |
+| 2 | **Stage backend** (`docs/adr/0008`): character store, asset catalog with licences, wardrobe and outfit director, scene objects, mood engine, behaviour director, speech pipeline, persistent character memory tied to the second brain; headless simulator stage and conformance tests; the web room becomes the first (draft) stage |
+| 3 | Engine reference stage on the RTX 5070 Ti (Unreal or Unity, decided after references and a spike): live lip sync, outfit swap, scene editor, embedded or windowed |
+| 4 | Realism: character-creation pipeline (MetaHuman / Character Creator class), strand hair, cloth, Audio2Face-3D, expressive voice |
+
+What the user must do for tests on their PC: connect it through Remote Control (Claude Desktop app, Settings, Claude Code, Remote Control, or `claude remote-control` in a terminal in the repo folder). Then the spikes in `spikes/` and the GPU/engine measurements can run on the RTX 5070 Ti.

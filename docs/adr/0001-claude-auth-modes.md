@@ -55,3 +55,11 @@ The user chose "both / not sure": a config switch rather than a fixed mode.
 - https://code.claude.com/docs/en/setup
 - https://code.claude.com/docs/en/agent-sdk/claude-code-features
 - https://code.claude.com/docs/en/mcp
+
+## Update 2026-10-31: embedded terminal and connectors
+
+The user wants to use either a Claude subscription or an API key, and to have terminal access inside the app. This sharpens the decision:
+
+- **Embedded terminal (planned Phase 1.5):** the app hosts the user's own, unmodified `claude` binary in a pseudo-terminal. The user signs in themselves, so the subscription case is the documented end-user case, not an app offering claude.ai login. The daemon never reads or stores those credentials. Sessions started there are observed by the same hooks as any other terminal session.
+- **Secretary lane (automated):** still a config switch (`api-key` or `local-login`). `api-key` stays the terms-safe default for anything the daemon launches unattended. `local-login` drives the user's own logged-in binary and remains a grey area until Anthropic confirms (see `spikes/tos-email.md`).
+- **Connectors:** claude.ai connectors (Gmail, Google Calendar, and others) only load under a subscription login, not under an API key. With an API key the same services need direct OAuth or another tool server. The integrations hub (Phase 1.5) supports both routes behind one interface.

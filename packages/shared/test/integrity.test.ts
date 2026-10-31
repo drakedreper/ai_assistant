@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildSnapshot } from '../src/fixtures'
-import { Snapshot, TOOL_SURFACE } from '../src'
+import { ARKIT_52, Snapshot, StageCommand, TOOL_SURFACE } from '../src'
 
 const snap = buildSnapshot(new Date('2026-11-02T08:15:00'))
 
@@ -86,5 +86,15 @@ describe('fixtures', () => {
     expect(new Set(names).size).toBe(names.length)
     const readerWrites = TOOL_SURFACE.filter((t) => t.lanes.includes('reader') && !t.readOnly)
     expect(readerWrites).toEqual([])
+  })
+
+  it('stage protocol: ARKit set is 52 unique shapes and a speak command parses', () => {
+    expect(ARKIT_52.length).toBe(52)
+    expect(new Set(ARKIT_52).size).toBe(52)
+    const r = StageCommand.safeParse({
+      id: 'c1', type: 'perform.speak', utteranceId: 'u1', text: 'Hello', emotion: 'happy',
+      audio: { format: 'pcm_s16le', sampleRate: 24000, channels: 1 }, faceSource: 'stage',
+    })
+    expect(r.success).toBe(true)
   })
 })
