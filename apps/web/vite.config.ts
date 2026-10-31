@@ -3,12 +3,11 @@ import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
 import { viteSingleFile } from 'vite-plugin-singlefile'
 
-// SINGLEFILE=1 builds one self-contained index.html (used to publish a clickable copy of the mockup).
-const single = process.env.SINGLEFILE === '1'
-
-export default defineConfig({
-  plugins: [react(), tailwindcss(), ...(single ? [viteSingleFile()] : [])],
+// `vite build --mode single` produces one self-contained index.html (a clickable copy of the mockup).
+// A mode flag instead of an env var keeps the script working in PowerShell and cmd on Windows.
+export default defineConfig(({ mode }) => ({
+  plugins: [react(), tailwindcss(), ...(mode === 'single' ? [viteSingleFile()] : [])],
   resolve: { dedupe: ['react', 'react-dom', 'three'] },
   server: { host: '127.0.0.1', port: 5173 },
   build: { chunkSizeWarningLimit: 2500 },
-})
+}))

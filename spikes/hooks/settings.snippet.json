@@ -1,0 +1,31 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "http", "url": "http://127.0.0.1:7433/hooks/SessionStart", "timeout": 2, "onFailure": "continue", "headers": { "Authorization": "Bearer $SPIKE_HOOK_TOKEN" }, "allowedEnvVars": ["SPIKE_HOOK_TOKEN"] } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "http", "url": "http://127.0.0.1:7433/hooks/UserPromptSubmit", "timeout": 2, "onFailure": "continue", "headers": { "Authorization": "Bearer $SPIKE_HOOK_TOKEN" }, "allowedEnvVars": ["SPIKE_HOOK_TOKEN"] } ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "http", "url": "http://127.0.0.1:7433/hooks/PostToolUse", "timeout": 2, "onFailure": "continue", "headers": { "Authorization": "Bearer $SPIKE_HOOK_TOKEN" }, "allowedEnvVars": ["SPIKE_HOOK_TOKEN"] } ] }
+    ],
+    "PostToolUseFailure": [
+      { "hooks": [ { "type": "http", "url": "http://127.0.0.1:7433/hooks/PostToolUseFailure", "timeout": 2, "onFailure": "continue", "headers": { "Authorization": "Bearer $SPIKE_HOOK_TOKEN" }, "allowedEnvVars": ["SPIKE_HOOK_TOKEN"] } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "http", "url": "http://127.0.0.1:7433/hooks/Notification", "timeout": 2, "onFailure": "continue", "headers": { "Authorization": "Bearer $SPIKE_HOOK_TOKEN" }, "allowedEnvVars": ["SPIKE_HOOK_TOKEN"] } ] }
+    ],
+    "SubagentStart": [
+      { "hooks": [ { "type": "http", "url": "http://127.0.0.1:7433/hooks/SubagentStart", "timeout": 2, "onFailure": "continue", "headers": { "Authorization": "Bearer $SPIKE_HOOK_TOKEN" }, "allowedEnvVars": ["SPIKE_HOOK_TOKEN"] } ] }
+    ],
+    "SubagentStop": [
+      { "hooks": [ { "type": "http", "url": "http://127.0.0.1:7433/hooks/SubagentStop", "timeout": 2, "onFailure": "continue", "headers": { "Authorization": "Bearer $SPIKE_HOOK_TOKEN" }, "allowedEnvVars": ["SPIKE_HOOK_TOKEN"] } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "http", "url": "http://127.0.0.1:7433/hooks/Stop", "timeout": 2, "onFailure": "continue", "headers": { "Authorization": "Bearer $SPIKE_HOOK_TOKEN" }, "allowedEnvVars": ["SPIKE_HOOK_TOKEN"] } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "http", "url": "http://127.0.0.1:7433/hooks/SessionEnd", "timeout": 2, "onFailure": "continue", "headers": { "Authorization": "Bearer $SPIKE_HOOK_TOKEN" }, "allowedEnvVars": ["SPIKE_HOOK_TOKEN"] } ] }
+    ]
+  }
+}

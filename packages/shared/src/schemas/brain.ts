@@ -39,6 +39,10 @@ export const Note = z.object({
   /** Where the note physically lives: our vault, or the federated Secondbrain app (read-only). */
   source: z.enum(['vault', 'secondbrain']).default('vault'),
   reviewAfter: IsoDate.optional(),
+  /** Estimated tokens when this note is loaded into context (shown for the always-loaded core layer). */
+  contextTokens: z.number().int().positive().optional(),
+  /** Path of the note that replaced this one (set when status is superseded). */
+  supersededBy: z.string().optional(),
   /** Markdown with [[wikilinks]]. */
   body: z.string(),
 })
@@ -56,8 +60,22 @@ export const Proposal = z.object({
   createdAt: IsoDateTime,
   provenance: Provenance,
   evidence: z.array(z.object({ path: z.string(), title: z.string() })),
+  /** When you approved or rejected it. */
+  decidedAt: IsoDateTime.optional(),
+  /** git commit created by an approved proposal (reversible). */
+  commit: z.string().optional(),
 })
 export type Proposal = z.infer<typeof Proposal>
+
+/** One note touched by a memory job, shown in the expandable "what changed" list. */
+export const MemoryChange = z.object({
+  path: z.string(),
+  title: z.string(),
+  kind: z.enum(['created', 'updated', 'merged', 'proposed', 'filed', 'archived', 'indexed']),
+  /** One short line on what exactly happened. */
+  note: z.string().optional(),
+})
+export type MemoryChange = z.infer<typeof MemoryChange>
 
 /** One entry on the memory timeline: a nightly "dream", a weekly review, a triage run... */
 export const MemoryEntry = z.object({
@@ -71,5 +89,9 @@ export const MemoryEntry = z.object({
   costUsd: z.number(),
   /** git commit that makes the job reversible. */
   commit: z.string().optional(),
+  /** Notes this job touched. */
+  changes: z.array(MemoryChange).optional(),
+  /** How long the job ran. */
+  durationSec: z.number().int().nonnegative().optional(),
 })
 export type MemoryEntry = z.infer<typeof MemoryEntry>

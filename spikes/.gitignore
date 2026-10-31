@@ -1,0 +1,5 @@
+# Spike output can contain hook payloads, prompts and paths. Never commit it.
+**/results/
+*.jsonl
+node_modules/
+package-lock.json

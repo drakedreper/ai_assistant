@@ -1,0 +1,15 @@
+{
+  "name": "spike-ttft",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Phase 0b spike (a): time to first token, persistent Agent SDK session vs direct Messages API. Standalone: not part of the pnpm workspace. Run `npm install` here only when you are ready to run the spike.",
+  "engines": { "node": ">=22.12" },
+  "scripts": {
+    "start": "node ttft.mjs",
+    "direct-only": "node ttft.mjs --only direct"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.316"
+  }
+}

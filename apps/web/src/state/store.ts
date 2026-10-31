@@ -67,6 +67,7 @@ export interface AppState {
 }
 
 let emotionTimer: ReturnType<typeof setTimeout> | undefined
+let initPromise: Promise<void> | undefined
 
 function isQuietNow(now: Date, quiet: { from: string; to: string }): boolean {
   const toMin = (s: string) => {
@@ -108,8 +109,8 @@ export const useStore = create<AppState>((set, get) => ({
   micOn: false,
   streaming: false,
 
-  init: async () => {
-    if (get().ready) return
+  // One shared promise: React StrictMode (dev) calls init twice, and a second subscription would apply every event twice.
+  init: () => (initPromise ??= (async () => {
     const data = await api.getSnapshot()
     set({
       data,
@@ -120,7 +121,7 @@ export const useStore = create<AppState>((set, get) => ({
     api.subscribe((e) => get().applyEvent(e))
     // Keep "now" (and everything relative to it) fresh.
     setInterval(() => set({ now: new Date() }), 30_000)
-  },
+  })()),
 
   navigate: (view, params = {}) => set({ view, viewParams: params }),
   clearParams: () => set({ viewParams: {} }),
@@ -142,7 +143,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   send: async (text, modality = 'text') => {
     if (get().asleep) set({ asleep: false })
-    set({ streaming: true })
+    set({ streaming: true, assistantState: 'thinking' })
     await api.sendChat(text, modality)
   },
 

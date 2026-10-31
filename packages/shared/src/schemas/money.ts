@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { NoteRef } from './assistant'
 import { Id, IsoDate, IsoDateTime, Money } from './common'
 
 /** Finance contract v0.1. READ-ONLY: no money movement, no write methods. Atlas maps onto this later. */
@@ -18,6 +19,8 @@ export const BalanceSnapshot = z.object({
   asOf: IsoDateTime,
   current: Money,
   available: Money.optional(),
+  /** Balance about 30 days earlier, for the per-account change chip. */
+  previous: Money.optional(),
 })
 export type BalanceSnapshot = z.infer<typeof BalanceSnapshot>
 
@@ -26,6 +29,8 @@ export const Category = z.object({
   name: z.string(),
   parentId: Id.optional(),
   kind: z.enum(['income', 'expense', 'transfer']),
+  /** Fixed cost (rent, insurance): the budget bar reads "paid" instead of "used". */
+  fixed: z.boolean().optional(),
 })
 export type Category = z.infer<typeof Category>
 
@@ -70,6 +75,37 @@ export const Bill = z.object({
 })
 export type Bill = z.infer<typeof Bill>
 
+/** One month of cash flow. Expenses are signed (negative = outflow), income positive. */
+export const CashFlowPoint = z.object({
+  month: z.string().regex(/^\d{4}-\d{2}$/),
+  income: Money,
+  expenses: Money,
+})
+export type CashFlowPoint = z.infer<typeof CashFlowPoint>
+
+/** The strategy-note-backed independence plan (runway, target and projection). Aggregates only. */
+export const FinancialIndependence = z.object({
+  /** Vault note that owns the plan; the card cites it. */
+  notePath: z.string(),
+  targetRunwayMonths: z.number(),
+  runwayMonths: z.number(),
+  monthlyBurn: Money,
+  /** 0..1 share of income that is saved. */
+  savingsRate: z.number().min(0).max(1),
+  targetDate: IsoDate,
+  projectedDate: IsoDate,
+  /** How runway is counted, in plain words. */
+  basis: z.string(),
+})
+export type FinancialIndependence = z.infer<typeof FinancialIndependence>
+
+/** Mira's short read of the numbers; it must cite the notes it leans on. */
+export const FinanceInsight = z.object({
+  body: z.string(),
+  cites: z.array(NoteRef).min(1),
+})
+export type FinanceInsight = z.infer<typeof FinanceInsight>
+
 /** Everything the Money screen shows. Aggregates by default; raw transactions on demand. */
 export const FinanceSnapshot = z.object({
   connected: z.boolean(),
@@ -81,5 +117,9 @@ export const FinanceSnapshot = z.object({
   budget: z.array(BudgetLine),
   netWorth: z.array(NetWorthPoint),
   upcomingBills: z.array(Bill),
+  /** Last 6 months, oldest first. */
+  cashFlow: z.array(CashFlowPoint).optional(),
+  independence: FinancialIndependence.optional(),
+  insight: FinanceInsight.optional(),
 })
 export type FinanceSnapshot = z.infer<typeof FinanceSnapshot>

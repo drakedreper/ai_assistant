@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spike (c): WebGL, camera and audio check</title>
+<meta name="description" content="Single static page. Checks WebGL2, getUserMedia, AudioContext latency and AudioWorklet in the browser you will use, and prints a report. No network access, no dependencies.">
+<style>
+  :root { color-scheme: light dark; --bg: #f6f6f8; --fg: #1b1b22; --muted: #5d5d6b; --card: #ffffff; --line: #d8d8e0; --ok: #1a7f4b; --warn: #a15c00; --bad: #b3261e; --accent: #5b4bd6; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #14141a; --fg: #ececf3; --muted: #a2a2b2; --card: #1d1d26; --line: #34343f; --ok: #5fd39a; --warn: #f0b452; --bad: #ff8a80; --accent: #a99cff; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 4px 0 12px; color: var(--muted); }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  button { font: inherit; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: .55; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 720px) { .grid { grid-template-columns: 1fr 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  .card h2 { font-size: 13px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  video, canvas { width: 100%; height: auto; border-radius: 8px; background: #000; display: block; }
+  #verdict { font-size: 16px; font-weight: 600; margin: 12px 0; }
+  #report { white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin: 0; max-height: 60vh; overflow: auto; }
+  .pass { color: var(--ok); } .warn { color: var(--warn); } .fail { color: var(--bad); }
+  small { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Spike (c): WebGL, camera and audio check</h1>
+  <p>Run this in the browser you will use for the app (Edge or Chrome). Serve it from localhost (for example <code>py -m http.server 8099 --bind 127.0.0.1</code> in this folder, then open <code>http://127.0.0.1:8099/</code>) or open the file directly. Nothing leaves this page: no network requests, no uploads. The camera and microphone tests start only when you press their buttons, and every stream is stopped afterwards.</p>
+
+  <div class="bar" role="group" aria-label="Checks">
+    <button id="btn-all" class="primary" type="button">Run all checks</button>
+    <button id="btn-gl" type="button">WebGL2 and frame pacing</button>
+    <button id="btn-cam" type="button">Camera</button>
+    <button id="btn-mic" type="button">Microphone (speak for 3 s)</button>
+    <button id="btn-audio" type="button">Audio output and worklet</button>
+  </div>
+
+  <div id="verdict" role="status" aria-live="polite">No checks run yet.</div>
+
+  <div class="grid">
+    <section class="card" aria-label="WebGL test canvas"><h2>WebGL test</h2><canvas id="gl" width="480" height="270"></canvas></section>
+    <section class="card" aria-label="Camera preview"><h2>Camera preview</h2><video id="cam" playsinline muted></video></section>
+  </div>
+
+  <div class="bar" role="group" aria-label="Report actions">
+    <button id="btn-copy" type="button">Copy report</button>
+    <button id="btn-json" type="button">Download JSON</button>
+  </div>
+  <pre id="report" aria-live="polite" aria-label="Report"></pre>
+  <p><small>Gates are listed in spikes/README.md. A software renderer (SwiftShader, llvmpipe) or a black camera frame is a fail for this spike.</small></p>
+</main>
+
+<script>
+'use strict';
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const out = $('report');
+  const results = [];           // { group, name, status, detail }
+  const data = { startedAt: new Date().toISOString(), userAgent: navigator.userAgent, results };
+
+  function add(group, name, status, detail) {
+    results.push({ group, name, status, detail: String(detail ?? '') });
+    render();
+  }
+  function render() {
+    const lines = [];
+    lines.push('Spike (c) report ' + data.startedAt);
+    lines.push('User agent: ' + data.userAgent);
+    let group = '';
+    for (const r of results) {
+      if (r.group !== group) { group = r.group; lines.push('', '[' + group + ']'); }
+      lines.push('  ' + r.status.toUpperCase().padEnd(5) + ' ' + r.name + (r.detail ? ': ' + r.detail : ''));
+    }
+    out.textContent = lines.join('\n');
+    const fails = results.filter((r) => r.status === 'fail').length;
+    const warns = results.filter((r) => r.status === 'warn').length;
+    const v = $('verdict');
+    if (results.length === 0) { v.textContent = 'No checks run yet.'; v.className = ''; return; }
+    v.textContent = fails ? 'FAIL: ' + fails + ' check(s) failed, ' + warns + ' warning(s).' : (warns ? 'PASS with ' + warns + ' warning(s).' : 'PASS: all checks that ran passed.');
+    v.className = fails ? 'fail' : (warns ? 'warn' : 'pass');
+  }
+  const fmt = (n, d = 1) => (Number.isFinite(n) ? n.toFixed(d) : 'n/a');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const percentile = (arr, p) => { const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.max(0, Math.ceil(p / 100 * s.length) - 1))]; };
+
+  // ---------- environment ----------
+  function checkEnvironment() {
+    const g = 'Environment';
+    add(g, 'Secure context', window.isSecureContext ? 'pass' : 'fail', window.isSecureContext ? location.protocol + '//' + location.host : 'getUserMedia needs a secure context; use http://127.0.0.1 or http://localhost');
+    add(g, 'Hardware', 'info', 'cores ' + (navigator.hardwareConcurrency ?? 'n/a') + ', deviceMemory ' + (navigator.deviceMemory ?? 'n/a') + ' GB (capped by the browser), devicePixelRatio ' + window.devicePixelRatio);
+    add(g, 'Isolation', 'info', 'crossOriginIsolated ' + window.crossOriginIsolated + ', SharedArrayBuffer ' + (typeof SharedArrayBuffer !== 'undefined') + ', OffscreenCanvas ' + (typeof OffscreenCanvas !== 'undefined') + ', WebAssembly ' + (typeof WebAssembly !== 'undefined'));
+    add(g, 'Media APIs', navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? 'pass' : 'fail', 'mediaDevices.getUserMedia ' + !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) + ', AudioContext ' + !!(window.AudioContext || window.webkitAudioContext) + ', AudioWorklet ' + !!(window.AudioWorkletNode));
+  }
+
+  // ---------- WebGL2 and frame pacing ----------
+  const VS = '#version 300 es\nvoid main(){ vec2 p = vec2((gl_VertexID<<1)&2, gl_VertexID&2); gl_Position = vec4(p*2.0-1.0, 0.0, 1.0); }';
+  const FS = '#version 300 es\nprecision highp float; uniform float t; uniform vec2 r; out vec4 o;\n' +
+    'void main(){ vec2 uv = gl_FragCoord.xy / r; float a = 0.0; for(int i=0;i<48;i++){ a += sin(uv.x*float(i+3)+t) * cos(uv.y*float(i+5)-t); } o = vec4(0.5+0.5*sin(a), uv.y, 0.5+0.5*cos(a), 1.0); }';
+
+  function compile(gl, type, src) {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) || 'shader compile failed');
+    return s;
+  }
+
+  async function checkWebGL() {
+    const g = 'WebGL2';
+    const canvas = $('gl');
+    let gl;
+    try { gl = canvas.getContext('webgl2', { powerPreference: 'high-performance', antialias: true }); } catch (e) { gl = null; }
+    if (!gl) { add(g, 'WebGL2 context', 'fail', 'could not create a WebGL2 context (GPU blocklisted, drivers, or disabled hardware acceleration)'); return; }
+    add(g, 'WebGL2 context', 'pass', gl.getParameter(gl.VERSION) + ' / ' + gl.getParameter(gl.SHADING_LANGUAGE_VERSION));
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '(renderer hidden)';
+    const vendor = dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : '';
+    const software = /swiftshader|llvmpipe|software|basic render|microsoft basic/i.test(renderer + ' ' + vendor);
+    add(g, 'Renderer', software ? 'fail' : 'pass', vendor + ' ' + renderer + (software ? ' (software rendering: enable hardware acceleration and check the GPU driver)' : ''));
+    add(g, 'Limits', 'info', 'MAX_TEXTURE_SIZE ' + gl.getParameter(gl.MAX_TEXTURE_SIZE) + ', MAX_SAMPLES ' + gl.getParameter(gl.MAX_SAMPLES) + ', extensions ' + (gl.getSupportedExtensions() || []).length);
+    add(g, 'Float render targets', gl.getExtension('EXT_color_buffer_float') ? 'pass' : 'warn', 'EXT_color_buffer_float ' + !!gl.getExtension('EXT_color_buffer_float') + ', OES_texture_float_linear ' + !!gl.getExtension('OES_texture_float_linear'));
+
+    let prog;
+    try {
+      prog = gl.createProgram();
+      gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VS));
+      gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FS));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog) || 'link failed');
+    } catch (e) { add(g, 'Shader test', 'fail', e.message); return; }
+    gl.useProgram(prog);
+    const uT = gl.getUniformLocation(prog, 't');
+    const uR = gl.getUniformLocation(prog, 'r');
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.uniform2f(uR, canvas.width, canvas.height);
+
+    // Measure frame intervals over about 3 seconds with a moderate fragment workload.
+    const intervals = [];
+    let last = performance.now();
+    const t0 = last;
+    await new Promise((resolve) => {
+      // A hidden tab never fires requestAnimationFrame, so also give up after 6 seconds.
+      const giveUp = setTimeout(resolve, 6000);
+      function frame(now) {
+        intervals.push(now - last); last = now;
+        gl.uniform1f(uT, (now - t0) / 1000);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        if (now - t0 < 3000) requestAnimationFrame(frame); else { clearTimeout(giveUp); resolve(); }
+      }
+      requestAnimationFrame(frame);
+    });
+    gl.finish();
+    intervals.shift(); // first interval includes setup
+    if (intervals.length < 10) {
+      add(g, 'Frame pacing', 'fail', 'only ' + intervals.length + ' frames rendered in 6 s (is the tab hidden or the GPU stalled? keep this tab visible and rerun)');
+    } else {
+      const med = percentile(intervals, 50), p95 = percentile(intervals, 95), worst = Math.max(...intervals);
+      const dropped = intervals.filter((x) => x > med * 1.5).length;
+      const fps = 1000 / med;
+      const ok = med <= 34 && p95 <= Math.max(med * 1.6, 20) && !document.hidden;
+      add(g, 'Frame pacing', ok ? 'pass' : 'warn', 'median ' + fmt(med) + ' ms (' + fmt(fps, 0) + ' fps), p95 ' + fmt(p95) + ' ms, worst ' + fmt(worst) + ' ms, slow frames ' + dropped + '/' + intervals.length + (document.hidden ? ' (tab was hidden: rAF is throttled, rerun with the tab visible)' : ''));
+    }
+
+    if (navigator.gpu) {
+      try {
+        const ad = await navigator.gpu.requestAdapter();
+        const info = ad && (ad.info || (ad.requestAdapterInfo ? await ad.requestAdapterInfo() : null));
+        add(g, 'WebGPU (informational)', 'info', ad ? 'adapter available' + (info ? ': ' + [info.vendor, info.architecture, info.description].filter(Boolean).join(' ') : '') : 'no adapter');
+      } catch (e) { add(g, 'WebGPU (informational)', 'info', 'error: ' + e.message); }
+    } else add(g, 'WebGPU (informational)', 'info', 'navigator.gpu not present (the plan uses the WebGL path anyway)');
+  }
+
+  // ---------- camera ----------
+  async function checkCamera() {
+    const g = 'Camera';
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { add(g, 'getUserMedia', 'fail', 'not available'); return; }
+    let before = [];
+    try { before = await navigator.mediaDevices.enumerateDevices(); } catch (e) { /* ignore */ }
+    add(g, 'Devices before permission', 'info', 'videoinput ' + before.filter((d) => d.kind === 'videoinput').length + ', audioinput ' + before.filter((d) => d.kind === 'audioinput').length + ', audiooutput ' + before.filter((d) => d.kind === 'audiooutput').length);
+    let stream;
+    const tAsk = performance.now();
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    } catch (e) {
+      const hint = e.name === 'NotAllowedError' ? 'permission denied or blocked by Windows privacy settings' : e.name === 'NotFoundError' ? 'no camera found' : e.name === 'NotReadableError' ? 'camera is in use by another app (Teams, Zoom?) or blocked' : '';
+      add(g, 'getUserMedia(video)', 'fail', e.name + ': ' + e.message + (hint ? ' (' + hint + ')' : ''));
+      return;
+    }
+    const tGrant = performance.now();
+    add(g, 'getUserMedia(video)', 'pass', 'granted after ' + fmt(tGrant - tAsk, 0) + ' ms (includes any permission prompt)');
+    const track = stream.getVideoTracks()[0];
+    const s = track.getSettings();
+    add(g, 'Track', 'info', (track.label || 'unnamed') + ', ' + s.width + 'x' + s.height + ' @ ' + fmt(s.frameRate, 0) + ' fps, readyState ' + track.readyState + ', muted ' + track.muted);
+    const v = $('cam');
+    v.srcObject = stream;
+    try { await v.play(); } catch (e) { add(g, 'Preview play()', 'warn', e.message); }
+    const tFrame0 = performance.now();
+    await new Promise((resolve) => {
+      if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => resolve()); else v.addEventListener('loadeddata', () => resolve(), { once: true });
+      setTimeout(resolve, 4000);
+    });
+    add(g, 'Time to first frame after grant', 'info', fmt(performance.now() - tFrame0, 0) + ' ms');
+    await sleep(600);
+
+    // Grab a frame, check it is not black, and run the "look at this" downscale to 768 px JPEG.
+    const vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !vh) { add(g, 'Frame grab', 'fail', 'video has no dimensions (no frames delivered)'); }
+    else {
+      const scale = Math.min(1, 768 / Math.max(vw, vh));
+      const w = Math.round(vw * scale), h = Math.round(vh * scale);
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(v, 0, 0, w, h);
+      const px = ctx.getImageData(0, 0, w, h).data;
+      let sum = 0, n = 0;
+      for (let i = 0; i < px.length; i += 4 * 97) { sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]; n++; }
+      const mean = sum / n;
+      add(g, 'Frame content', mean < 3 ? 'fail' : (mean < 12 ? 'warn' : 'pass'), 'mean luminance ' + fmt(mean) + ' of 255' + (mean < 3 ? ' (black frame: shutter closed, privacy switch, or wrong device)' : ''));
+      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.8));
+      const visualTokens = Math.ceil(w / 28) * Math.ceil(h / 28);
+      add(g, 'Snapshot pipeline', blob ? 'pass' : 'fail', blob ? w + 'x' + h + ' JPEG, ' + Math.round(blob.size / 1024) + ' KB, about ' + visualTokens + ' visual tokens (ceil(w/28) * ceil(h/28))' : 'canvas.toBlob returned null');
+    }
+    stream.getTracks().forEach((t) => t.stop());
+    v.srcObject = null;
+    add(g, 'Stream stopped', track.readyState === 'ended' ? 'pass' : 'warn', 'track readyState ' + track.readyState + '; the camera light should now be off');
+    try {
+      const after = await navigator.mediaDevices.enumerateDevices();
+      add(g, 'Devices after permission', 'info', after.filter((d) => d.kind === 'videoinput').map((d) => d.label || 'unnamed').join('; ') || 'none');
+    } catch (e) { /* ignore */ }
+  }
+
+  // ---------- microphone ----------
+  async function checkMic() {
+    const g = 'Microphone';
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { add(g, 'getUserMedia', 'fail', 'not available'); return; }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false }, video: false });
+    } catch (e) {
+      add(g, 'getUserMedia(audio)', 'fail', e.name + ': ' + e.message + (e.name === 'NotAllowedError' ? ' (permission denied or blocked by Windows privacy settings)' : ''));
+      return;
+    }
+    const track = stream.getAudioTracks()[0];
+    const s = track.getSettings();
+    add(g, 'getUserMedia(audio)', 'pass', (track.label || 'unnamed') + ', sampleRate ' + (s.sampleRate ?? 'n/a') + ', channels ' + (s.channelCount ?? 'n/a') + ', latency ' + (s.latency != null ? fmt(s.latency * 1000, 0) + ' ms' : 'n/a'));
+    add(g, 'Processing flags', 'info', 'echoCancellation ' + s.echoCancellation + ', noiseSuppression ' + s.noiseSuppression + ', autoGainControl ' + s.autoGainControl + ' (speaker echo is why barge-in starts with headphones)');
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ac = new AC({ latencyHint: 'interactive' });
+    await ac.resume();
+    const src = ac.createMediaStreamSource(stream);
+    const an = ac.createAnalyser(); an.fftSize = 2048;
+    src.connect(an);
+    const buf = new Float32Array(an.fftSize);
+    let peak = 0;
+    const tEnd = performance.now() + 3000;
+    while (performance.now() < tEnd) {
+      an.getFloatTimeDomainData(buf);
+      let sq = 0; for (let i = 0; i < buf.length; i++) sq += buf[i] * buf[i];
+      peak = Math.max(peak, Math.sqrt(sq / buf.length));
+      await sleep(50);
+    }
+    add(g, 'Signal level', peak > 0.02 ? 'pass' : (peak > 0.004 ? 'warn' : 'fail'), 'peak RMS ' + peak.toFixed(3) + (peak <= 0.004 ? ' (no signal: wrong input device, muted, or privacy switch)' : ''));
+    stream.getTracks().forEach((t) => t.stop());
+    await ac.close();
+  }
+
+  // ---------- audio output, latency, worklet ----------
+  async function checkAudio() {
+    const g = 'Audio output';
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { add(g, 'AudioContext', 'fail', 'not available'); return; }
+    const ac = new AC({ latencyHint: 'interactive' });
+    await ac.resume();
+    add(g, 'AudioContext', ac.state === 'running' ? 'pass' : 'warn', 'state ' + ac.state + ', sampleRate ' + ac.sampleRate + ' Hz');
+    const base = ac.baseLatency, outl = ac.outputLatency;
+    const total = (Number.isFinite(base) ? base : 0) + (Number.isFinite(outl) ? outl : 0);
+    const known = Number.isFinite(base) && Number.isFinite(outl) && outl > 0;
+    add(g, 'Latency', !known ? 'warn' : (total <= 0.1 ? 'pass' : (total <= 0.2 ? 'warn' : 'fail')), 'baseLatency ' + fmt(base * 1000) + ' ms, outputLatency ' + (known ? fmt(outl * 1000) + ' ms' : 'not reported') + ', total ' + fmt(total * 1000) + ' ms (budget for device and lip-sync alignment: 30 to 100 ms)');
+
+    // Inline AudioWorklet through a Blob URL: confirms worklets load in this browser and origin.
+    if (!window.AudioWorkletNode) { add(g, 'AudioWorklet', 'fail', 'AudioWorkletNode not available'); }
+    else {
+      try {
+        const code = 'class P extends AudioWorkletProcessor { constructor(){ super(); this.n=0; } process(i,o){ const ch=o[0][0]; for(let k=0;k<ch.length;k++){ ch[k]=Math.sin(2*Math.PI*440*(this.n++)/sampleRate)*0.05; } if(this.n>=sampleRate*0.25){ this.port.postMessage({done:true,frames:this.n}); return false; } return true; } } registerProcessor("spike-tone", P);';
+        const url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
+        await ac.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        const node = new AudioWorkletNode(ac, 'spike-tone');
+        const done = new Promise((resolve) => { node.port.onmessage = (e) => resolve(e.data); setTimeout(() => resolve(null), 2000); });
+        node.connect(ac.destination);
+        const r = await done;
+        add(g, 'AudioWorklet', r ? 'pass' : 'fail', r ? 'loaded from a Blob URL and rendered ' + r.frames + ' frames (you should have heard a short quiet tone)' : 'module loaded but the processor never reported back');
+      } catch (e) { add(g, 'AudioWorklet', 'fail', e.name + ': ' + e.message + ' (a strict CSP without blob: in script-src would also cause this)'); }
+    }
+    await ac.close();
+  }
+
+  // ---------- wiring ----------
+  const buttons = ['btn-all', 'btn-gl', 'btn-cam', 'btn-mic', 'btn-audio'].map($);
+  async function guarded(fn) {
+    buttons.forEach((b) => { b.disabled = true; });
+    try { await fn(); } catch (e) { add('Error', 'Unexpected', 'fail', e && e.message ? e.message : e); }
+    buttons.forEach((b) => { b.disabled = false; });
+  }
+  $('btn-gl').addEventListener('click', () => guarded(async () => { checkEnvironment(); await checkWebGL(); }));
+  $('btn-cam').addEventListener('click', () => guarded(checkCamera));
+  $('btn-mic').addEventListener('click', () => guarded(checkMic));
+  $('btn-audio').addEventListener('click', () => guarded(checkAudio));
+  $('btn-all').addEventListener('click', () => guarded(async () => {
+    results.length = 0;
+    checkEnvironment();
+    await checkWebGL();
+    await checkAudio();
+    await checkCamera();
+    await checkMic();
+  }));
+  $('btn-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(out.textContent); $('verdict').textContent += ' (report copied)'; }
+    catch (e) { const r = document.createRange(); r.selectNodeContents(out); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+  });
+  $('btn-json').addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'spike-c-report.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+  render();
+})();
+</script>
+</body>
+</html>

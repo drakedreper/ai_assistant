@@ -1,6 +1,7 @@
 import { Bell, Camera, CloudSun, Command, Cpu } from 'lucide-react'
 import { Badge, Kbd, Segmented, StatusDot } from '../components/ui'
 import { fmtDay, fmtUsd } from '../lib/format'
+import { useCostToday } from '../state/derived'
 import { pendingApprovals, useStore, type Preset } from '../state/store'
 
 const PRESETS: Array<{ value: Preset; label: string; title: string }> = [
@@ -16,11 +17,10 @@ export function TopBar() {
   const applyPreset = useStore((s) => s.applyPreset)
   const setPalette = useStore((s) => s.setPalette)
   const navigate = useStore((s) => s.navigate)
+  const spent = useCostToday()
   if (!data) return null
 
   const pending = pendingApprovals(data).length
-  const today = data.costDays[data.costDays.length - 1]
-  const spent = today ? Object.values(today.byProject).reduce((a, b) => a + b, 0) : 0
   const claude = data.settings.claude
   const w = data.world.weather
   const claudeColor = claude.status === 'connected' ? 'var(--color-ok)' : claude.status === 'degraded' ? 'var(--color-warn)' : 'var(--color-bad)'
@@ -58,7 +58,7 @@ export function TopBar() {
         )}
         <button
           type="button"
-          onClick={() => navigate('settings')}
+          onClick={() => navigate('settings', { tab: 'claude' })}
           title={`Claude: ${claude.status}, ${claude.mode}. Cost is an API-equivalent estimate, not a bill.`}
           className="glass hidden h-9 cursor-pointer items-center gap-2 px-3 text-xs text-muted transition hover:text-fg md:flex"
         >

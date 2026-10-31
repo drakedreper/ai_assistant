@@ -26,7 +26,12 @@ export function Rail() {
         today: d.approvals.filter((a) => a.status === 'pending').length,
         work: d.sessions.filter((x) => needsYouStatuses.includes(x.status)).length,
         brain: d.proposals.filter((p) => p.status === 'pending').length,
-        life: d.mail.filter((m) => m.triage === 'needs_reply' && m.unread).length,
+        // A reply is "handled" once its draft approval is decided; threads without a draft stay open.
+        life: d.mail.filter((m) => {
+          if (m.triage !== 'needs_reply') return false
+          const ap = m.approvalId ? d.approvals.find((a) => a.id === m.approvalId) : undefined
+          return !ap || ap.status === 'pending'
+        }).length,
       }
     }),
   )

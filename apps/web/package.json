@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173",
     "build": "tsc -p tsconfig.json && vite build",
-    "build:single": "SINGLEFILE=1 vite build --outDir dist-single",
+    "build:single": "vite build --mode single --outDir dist-single",
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview --host 127.0.0.1 --port 4173"
   },

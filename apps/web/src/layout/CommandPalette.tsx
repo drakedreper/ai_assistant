@@ -1,5 +1,5 @@
 import { CornerDownLeft, Search, Sparkles } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { VIEWS } from '../lib/areas'
 import { cn } from '../lib/cn'
 import { useStore, type Preset, type RoomMode } from '../state/store'
@@ -16,14 +16,6 @@ interface Item {
 export function CommandPalette() {
   const open = useStore((s) => s.paletteOpen)
   const setPalette = useStore((s) => s.setPalette)
-  const navigate = useStore((s) => s.navigate)
-  const setRoomMode = useStore((s) => s.setRoomMode)
-  const applyPreset = useStore((s) => s.applyPreset)
-  const setDayOverride = useStore((s) => s.setDayOverride)
-  const send = useStore((s) => s.send)
-  const [q, setQ] = useState('')
-  const [idx, setIdx] = useState(0)
-  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -36,13 +28,19 @@ export function CommandPalette() {
     return () => window.removeEventListener('keydown', onKey)
   }, [setPalette])
 
-  useEffect(() => {
-    if (open) {
-      setQ('')
-      setIdx(0)
-      setTimeout(() => inputRef.current?.focus(), 0)
-    }
-  }, [open])
+  // The dialog is mounted fresh on every open, so its query/selection state always starts empty.
+  return open ? <PaletteDialog /> : null
+}
+
+function PaletteDialog() {
+  const setPalette = useStore((s) => s.setPalette)
+  const navigate = useStore((s) => s.navigate)
+  const setRoomMode = useStore((s) => s.setRoomMode)
+  const applyPreset = useStore((s) => s.applyPreset)
+  const setDayOverride = useStore((s) => s.setDayOverride)
+  const send = useStore((s) => s.send)
+  const [q, setQ] = useState('')
+  const [idx, setIdx] = useState(0)
 
   const items = useMemo<Item[]>(() => {
     const close = () => setPalette(false)
@@ -64,8 +62,6 @@ export function CommandPalette() {
     return filtered
   }, [q, navigate, setRoomMode, applyPreset, setDayOverride, send, setPalette])
 
-  if (!open) return null
-
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setIdx((i) => Math.min(items.length - 1, i + 1)) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setIdx((i) => Math.max(0, i - 1)) }
@@ -79,7 +75,7 @@ export function CommandPalette() {
         <div className="flex items-center gap-2 border-b border-line px-4 py-3">
           <Search className="size-4 text-faint" />
           <input
-            ref={inputRef}
+            autoFocus
             value={q}
             onChange={(e) => { setQ(e.target.value); setIdx(0) }}
             onKeyDown={onKey}

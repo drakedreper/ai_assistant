@@ -27,8 +27,10 @@ function Stage() {
 export function Shell() {
   const roomMode = useStore((s) => s.roomMode)
   const view = useStore((s) => s.view)
+  // Guest mode blurs anything marked data-sensitive (see styles.css) while other people are around.
+  const guest = useStore((s) => s.data?.settings.guestMode ?? false)
   return (
-    <div className="flex h-full">
+    <div className="flex h-full" data-guest={guest ? 'on' : undefined}>
       <Rail />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar />

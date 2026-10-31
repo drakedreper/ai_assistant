@@ -33,6 +33,10 @@ export const AgentNode = z.object({
   type: z.string(),
   status: z.enum(['running', 'waiting', 'done', 'error']),
   lastMessage: z.string(),
+  /** What this subagent was asked to do (the Task prompt, shortened). */
+  description: z.string().optional(),
+  /** Tool the agent is using right now, if any. */
+  currentTool: z.string().optional(),
 })
 export type AgentNode = z.infer<typeof AgentNode>
 
@@ -55,6 +59,10 @@ export const Session = z.object({
   contextPct: z.number().min(0).max(100),
   agents: z.array(AgentNode),
   summary: z.string().optional(),
+  /** Vault note paths this session touches; Mira cites them when she flags the session. */
+  relatedNotes: z.array(z.string()).optional(),
+  /** Why the session failed or went stale (status error | stale). */
+  error: z.string().optional(),
 })
 export type Session = z.infer<typeof Session>
 

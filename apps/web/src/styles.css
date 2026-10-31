@@ -64,10 +64,19 @@ body {
 @keyframes pulse-dot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.8); } }
 .pulse-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
 @keyframes fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-.fade-up { animation: fade-up .28s ease-out both; }
+/* fill-mode backwards (not both): a retained transform would become the containing block for fixed overlays. */
+.fade-up { animation: fade-up .28s ease-out backwards; }
 @keyframes caret { 0%,100% { opacity: 1 } 50% { opacity: 0 } }
 .caret::after { content: "▍"; margin-left: 1px; color: var(--color-mira); animation: caret 1s steps(1) infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   .pulse-dot, .fade-up, .caret::after { animation: none; }
+}
+
+/* Guest mode: private content is blurred and cannot be selected until guest mode is turned off. */
+[data-guest='on'] [data-sensitive] {
+  filter: blur(7px);
+  user-select: none;
+  pointer-events: none;
+  transition: filter 0.2s ease;
 }

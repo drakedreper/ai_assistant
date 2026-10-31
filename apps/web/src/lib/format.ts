@@ -6,7 +6,8 @@ export function timeAgo(iso: string, now: Date = new Date()): string {
   const abs = Math.abs(diff)
   const fut = diff < 0
   const unit = (n: number, s: string) => (fut ? `in ${n} ${s}` : `${n} ${s} ago`)
-  if (abs < 45) return fut ? 'in a moment' : 'just now'
+  // Items created by the live simulator carry the real clock while `now` ticks every 30 s, so tiny future offsets mean "just now".
+  if (abs < 90) return 'just now'
   if (abs < 3600) return unit(Math.round(abs / 60), 'min')
   if (abs < 86400) return unit(Math.round(abs / 3600), 'h')
   return unit(Math.round(abs / 86400), 'd')

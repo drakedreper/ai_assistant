@@ -63,6 +63,8 @@ export const TrustRule = z.object({
   mode: z.enum(['ask', 'auto']),
   /** Hard limit: can never be promoted to auto. */
   locked: z.boolean(),
+  /** Why it is locked, shown next to the lock. */
+  lockReason: z.string().optional(),
   approvals: z.number().int(),
   rejections: z.number().int(),
   /** Offered when approvals pile up with zero rejections. */
@@ -79,6 +81,10 @@ export const AuditEntry = z.object({
   outcome: z.enum(['approved', 'denied', 'auto', 'blocked']),
   /** What was sent to the cloud model, if anything. */
   sentToCloud: z.string().optional(),
+  /** Why it was blocked, or any other one-line context. */
+  detail: z.string().optional(),
+  /** The target names private content (mail, money, intimate memory): blurred in Guest mode. */
+  sensitive: z.boolean().optional(),
 })
 export type AuditEntry = z.infer<typeof AuditEntry>
 
@@ -100,5 +106,9 @@ export const SettingsSnapshot = z.object({
   privacy: z.array(PrivacyFlow),
   guestMode: z.boolean(),
   webcam: z.object({ enabled: z.boolean(), retention: z.literal('none') }),
+  /** The second brain on disk (display only). */
+  vault: z
+    .object({ path: z.string(), commits: z.number().int(), lastCommitAt: IsoDateTime })
+    .optional(),
 })
 export type SettingsSnapshot = z.infer<typeof SettingsSnapshot>

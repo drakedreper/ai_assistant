@@ -38,3 +38,6 @@ screenshots/
 *.sqlite
 vault/
 .brain/
+
+# Single-file build
+dist-single/

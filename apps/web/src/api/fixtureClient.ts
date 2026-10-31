@@ -14,6 +14,13 @@ import { scriptReply } from './chatScript'
 
 type Draft<T> = T extends unknown ? Omit<T, 'seq' | 'ts'> : never
 
+/** Deterministic fake short git sha, so approved proposals show a believable, reversible commit. */
+const fakeSha = (seed: string): string => {
+  let h = 2166136261
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619)
+  return (h >>> 0).toString(16).padStart(8, '0').slice(0, 7)
+}
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 const SIM_TOOLS: Array<[string, string]> = [
@@ -36,6 +43,7 @@ export class FixtureClient implements ApiClient {
   private seq = 0
   private n = 0
   private streamToken = 0
+  private currentMsgId: string | null = null
   private timers: ReturnType<typeof setInterval>[] = []
 
   constructor(opts: { simulate?: boolean; now?: Date } = {}) {
@@ -69,6 +77,8 @@ export class FixtureClient implements ApiClient {
 
   async interruptChat(): Promise<void> {
     this.streamToken++
+    // Close the in-flight message so the UI clears its streaming state (barge-in).
+    if (this.currentMsgId) this.emit({ type: 'chat.done', messageId: this.currentMsgId })
     this.emit({ type: 'avatar', event: { type: 'pose', state: 'idle' } })
   }
 
@@ -86,6 +96,7 @@ export class FixtureClient implements ApiClient {
       parts: [],
     }
     this.snap.chat.push(msg)
+    this.currentMsgId = msg.id
     const push = () => this.emit({ type: 'chat.message', message: structuredClone(msg) })
 
     for (const step of scriptReply(text, this.snap)) {
@@ -119,6 +130,7 @@ export class FixtureClient implements ApiClient {
         await sleep(160)
       }
     }
+    this.currentMsgId = null
     this.emit({ type: 'chat.done', messageId: msg.id })
     this.emit({ type: 'avatar', event: { type: 'pose', state: 'idle' } })
   }
@@ -157,6 +169,8 @@ export class FixtureClient implements ApiClient {
       const p = this.snap.proposals.find((x) => x.id === ap.refId)
       if (p && p.status === 'pending') {
         p.status = decision === 'approved' ? 'approved' : 'rejected'
+        p.decidedAt = new Date().toISOString()
+        if (decision === 'approved') p.commit = fakeSha(p.id + p.decidedAt)
         this.emit({ type: 'proposal.update', proposal: structuredClone(p) })
       }
     }
@@ -174,6 +188,8 @@ export class FixtureClient implements ApiClient {
     const p = this.snap.proposals.find((x) => x.id === id)
     if (!p || p.status !== 'pending') return
     p.status = decision
+    p.decidedAt = new Date().toISOString()
+    if (decision === 'approved') p.commit = fakeSha(p.id + p.decidedAt)
     this.emit({ type: 'proposal.update', proposal: structuredClone(p) })
     const ap = this.snap.approvals.find((a) => a.refId === id && a.status === 'pending')
     if (ap) {
