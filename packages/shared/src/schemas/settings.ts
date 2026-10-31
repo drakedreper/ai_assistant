@@ -106,6 +106,8 @@ export const SettingsSnapshot = z.object({
   privacy: z.array(PrivacyFlow),
   guestMode: z.boolean(),
   webcam: z.object({ enabled: z.boolean(), retention: z.literal('none') }),
+  /** Embedded terminals are off until the user turns them on (they can run any command as the user). */
+  terminals: z.object({ enabled: z.boolean() }).optional(),
   /** The second brain on disk (display only). */
   vault: z
     .object({ path: z.string(), commits: z.number().int(), lastCommitAt: IsoDateTime })

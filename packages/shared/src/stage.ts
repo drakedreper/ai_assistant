@@ -514,3 +514,28 @@ export const ARKIT_52 = [
   'noseSneerLeft', 'noseSneerRight', 'tongueOut',
 ] as const
 export type ARKitBlendshape = (typeof ARKIT_52)[number]
+
+// ---------------------------------------------------------------------------------------------------------------
+// What the dashboard UI sees of the stage backend (Snapshot.stage)
+// ---------------------------------------------------------------------------------------------------------------
+
+export const StageSnapshot = z.object({
+  /** False until the stage backend is switched on; the rest is then empty. */
+  enabled: z.boolean(),
+  characters: z.array(CharacterProfile),
+  /** The assistant (second brain's embodiment) and the user's representation. */
+  assistantCharacterId: z.string().nullable(),
+  userCharacterId: z.string().nullable(),
+  /** The catalog, metadata only (licence, slots, params). */
+  assets: z.array(Asset),
+  scene: Scene.nullable(),
+  scenePresets: z.array(z.object({ id: z.string(), name: z.string() })),
+  mood: Affect.nullable(),
+  /** The renderer currently attached (an engine, the web room, or the simulator). */
+  stage: z.object({
+    connected: z.boolean(),
+    engine: StageEngine.optional(),
+    capabilities: StageCapabilities.optional(),
+  }),
+})
+export type StageSnapshot = z.infer<typeof StageSnapshot>

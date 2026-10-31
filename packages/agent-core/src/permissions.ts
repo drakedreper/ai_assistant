@@ -156,7 +156,7 @@ export const assessRisk = (spec: Pick<ToolSpec, 'name' | 'tier' | 'readOnly'>, i
 
 // ------------------------------------------------------------------ cards
 
-const AREA: Record<ToolSpec['server'], Approval['area']> = { brain: 'brain', calendar: 'life', mail: 'life', contacts: 'life', finance: 'money', worklog: 'work', news: 'life' }
+const AREA: Record<ToolSpec['server'], Approval['area']> = { brain: 'brain', calendar: 'life', mail: 'life', contacts: 'life', finance: 'money', worklog: 'work', news: 'life', stage: 'brain' }
 const SENSITIVE_SERVERS = new Set<ToolSpec['server']>(['mail', 'finance'])
 
 function approvalKind(tool: string): Approval['kind'] {

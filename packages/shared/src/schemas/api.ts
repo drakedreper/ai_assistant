@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { AvatarEvent, Briefing, ChatMessage, LearnedFact } from './assistant'
 import { BrainLayer, MemoryEntry, Note, Proposal } from './brain'
+import { TerminalInfo } from '../daemon'
+import { StageSnapshot } from '../stage'
 import { Id, IsoDateTime } from './common'
 import { CalendarEvent, Contact, MailThread } from './life'
 import { FinanceSnapshot } from './money'
@@ -27,6 +29,10 @@ export const Snapshot = z.object({
   /** Screens whose data is still sample data, so the UI can say so honestly. Absent = nothing is mock (or this is the mockup). */
   mockSections: z.array(z.enum(['briefing', 'brain', 'life', 'money', 'world'])).optional(),
   briefing: Briefing,
+  /** Embedded terminals currently known to the daemon (daemon mode only). */
+  terminals: z.array(TerminalInfo).optional(),
+  /** The live 3D assistant backend (daemon mode only). */
+  stage: StageSnapshot.optional(),
   learned: z.array(LearnedFact),
   chat: z.array(ChatMessage),
   projects: z.array(Project),

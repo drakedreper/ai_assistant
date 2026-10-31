@@ -18,7 +18,9 @@
     "better-sqlite3": "^13.0.3",
     "hono": "^4.7.0",
     "ws": "^8.18.0",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "node-pty": "^1.1.0",
+    "@ai-assistant/stage-core": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

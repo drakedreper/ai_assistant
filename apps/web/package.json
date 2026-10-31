@@ -23,7 +23,9 @@
     "react-dom": "catalog:",
     "recharts": "^3.10.1",
     "three": "^0.187.0",
-    "zustand": "^5.0.16"
+    "zustand": "^5.0.16",
+    "@xterm/xterm": "^6.0.0",
+    "@xterm/addon-fit": "^0.11.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

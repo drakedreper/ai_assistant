@@ -17,3 +17,4 @@ catalog:
 onlyBuiltDependencies:
   - esbuild
   - better-sqlite3
+  - node-pty

@@ -25,6 +25,16 @@ export const DaemonRoutes = {
   webcam: '/api/settings/webcam',
   persona: '/api/settings/persona',
   learned: (id: string) => `/api/learned/${encodeURIComponent(id)}`,
+  /** Embedded terminals (highest-risk surface: see apps/daemon/README.md). All need terminals enabled in Settings. */
+  terminals: '/api/terminals',
+  terminal: (id: string) => `/api/terminals/${encodeURIComponent(id)}`,
+  /** POST: mint a single-use, short-lived ticket bound to this terminal. */
+  terminalTicket: (id: string) => `/api/terminals/${encodeURIComponent(id)}/ticket`,
+  terminalsEnabled: '/api/settings/terminals',
+  /** WebSocket for one terminal. No secrets in the URL: the first text frame must be {type:'auth', ticket}. */
+  terminalWs: (id: string) => `/ws/terminal/${encodeURIComponent(id)}`,
+  /** WebSocket for a stage (Unreal/Unity/simulator). Authenticates with `Authorization: Bearer <stage token>`; loopback only. */
+  stageWs: '/ws/stage',
   /** WebSocket. Query: ?since=<seq>&epoch=<epoch> to resume. */
   ws: '/ws',
   /** Claude Code http hooks POST here. Bearer = hook token. Always answers 200 fast (fail-open). */
@@ -136,3 +146,56 @@ export const NON_BLOCKING_HOOK_EVENTS = [
   'Stop',
   'SessionEnd',
 ] as const
+
+// ---------------------------------------------------------------------------------------------------------------
+// Embedded terminals
+// ---------------------------------------------------------------------------------------------------------------
+
+export const TerminalKind = z.enum(['claude', 'shell'])
+export type TerminalKind = z.infer<typeof TerminalKind>
+
+export const TerminalInfo = z.object({
+  id: z.string(),
+  kind: TerminalKind,
+  title: z.string(),
+  cwd: z.string(),
+  projectId: z.string().optional(),
+  cols: z.number().int(),
+  rows: z.number().int(),
+  createdAt: z.string(),
+  state: z.enum(['running', 'exited']),
+  exitCode: z.number().int().nullable().optional(),
+})
+export type TerminalInfo = z.infer<typeof TerminalInfo>
+
+export const TerminalCreateRequest = z.object({
+  kind: TerminalKind,
+  /** Start in a known project's root. Preferred over cwd. */
+  projectId: z.string().optional(),
+  /** Must resolve inside a known project root or the user's home; anything else is refused. */
+  cwd: z.string().optional(),
+  cols: z.number().int().min(10).max(500).default(100),
+  rows: z.number().int().min(5).max(200).default(30),
+})
+export type TerminalCreateRequest = z.infer<typeof TerminalCreateRequest>
+
+export const TerminalTicketResponse = z.object({ ticket: z.string(), expiresInSec: z.number() })
+export type TerminalTicketResponse = z.infer<typeof TerminalTicketResponse>
+
+/**
+ * Terminal WebSocket framing. Terminal bytes (output and keystrokes) travel as BINARY frames; everything else is
+ * one of these JSON text frames. The first client frame must be `auth`, within a few seconds, or the socket closes.
+ */
+export const TerminalClientMessage = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('auth'), ticket: z.string() }),
+  z.object({ type: z.literal('resize'), cols: z.number().int().min(10).max(500), rows: z.number().int().min(5).max(200) }),
+])
+export type TerminalClientMessage = z.infer<typeof TerminalClientMessage>
+
+export const TerminalServerMessage = z.discriminatedUnion('type', [
+  /** Sent after auth. `replayBytes` of scrollback follow as binary frames. */
+  z.object({ type: z.literal('ready'), replayBytes: z.number().int().nonnegative() }),
+  z.object({ type: z.literal('exit'), exitCode: z.number().int().nullable() }),
+  z.object({ type: z.literal('error'), message: z.string() }),
+])
+export type TerminalServerMessage = z.infer<typeof TerminalServerMessage>

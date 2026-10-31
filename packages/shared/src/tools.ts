@@ -10,7 +10,7 @@ import { z } from 'zod'
  */
 export interface ToolSpec {
   name: string
-  server: 'brain' | 'calendar' | 'mail' | 'contacts' | 'finance' | 'worklog' | 'news'
+  server: 'brain' | 'calendar' | 'mail' | 'contacts' | 'finance' | 'worklog' | 'news' | 'stage'
   description: string
   lanes: ReadonlyArray<'secretary' | 'reader'>
   tier: 'T0' | 'T1' | 'T2' | 'T3' | 'T4'
@@ -48,4 +48,17 @@ export const TOOL_SURFACE: ToolSpec[] = [
   { name: 'worklog_create_task', server: 'worklog', description: 'Add a kanban card.', lanes: ['secretary'], tier: 'T2', readOnly: false, input: z.object({ title: z.string(), projectId: z.string().optional() }) },
   // --- news ---
   { name: 'news_briefing', server: 'news', description: 'Latest stored briefing items, re-ranked for you.', lanes: ['secretary', 'reader'], tier: 'T0', readOnly: true, input: z.object({ topic: z.string().optional() }) },
+]
+
+/**
+ * Tools that let the assistant act on her own body and space. Kept apart from TOOL_SURFACE: the daemon merges the two
+ * when it wires the Secretary lane. All are cosmetic and reversible (low tiers) and never touch the outside world.
+ */
+export const STAGE_TOOL_SURFACE: ToolSpec[] = [
+  { name: 'stage_set_outfit', server: 'stage', description: 'Change what the assistant wears: a saved preset or specific items. The user can always override.', lanes: ['secretary'], tier: 'T1', readOnly: false, input: z.object({ presetId: z.string().optional(), slot: z.string().optional(), assetId: z.string().nullable().optional(), reason: z.string().optional() }) },
+  { name: 'stage_set_scene', server: 'stage', description: 'Switch to a saved scene preset or place/move/remove an object in the space.', lanes: ['secretary'], tier: 'T1', readOnly: false, input: z.object({ presetId: z.string().optional(), op: z.enum(['add', 'update', 'remove']).optional(), objectId: z.string().optional(), assetId: z.string().optional() }) },
+  { name: 'stage_gesture', server: 'stage', description: 'Perform a gesture from the animation library, shaped by her presence style.', lanes: ['secretary'], tier: 'T1', readOnly: false, input: z.object({ clip: z.string(), intensity: z.number().min(0).max(1).default(0.7) }) },
+  { name: 'stage_camera', server: 'stage', description: 'Move the camera to a named shot (wide, medium, closeup, profile, back, over_shoulder).', lanes: ['secretary'], tier: 'T1', readOnly: false, input: z.object({ shot: z.string() }) },
+  { name: 'character_remember', server: 'stage', description: 'Write a fact or moment to her persistent character memory (relationship, preference, episode).', lanes: ['secretary'], tier: 'T2', readOnly: false, input: z.object({ kind: z.enum(['episode', 'relationship', 'preference']), text: z.string().max(500), importance: z.number().int().min(1).max(5).default(2) }) },
+  { name: 'stage_state', server: 'stage', description: 'Read her current look, mood, posture and the scene.', lanes: ['secretary', 'reader'], tier: 'T0', readOnly: true, input: z.object({}) },
 ]
