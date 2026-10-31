@@ -2,7 +2,7 @@
 
 A local-first personal AI assistant for a Windows 11 PC. A small 3D room on the left holds "Mira" (placeholder name), a warm and playful partner who is also a sharp secretary, and who says plainly that she is an AI. Under the room is a live chat. The rest of the screen is the stage: a daily briefing, mission control for Claude Code sessions, a second brain (an Obsidian-compatible markdown vault with Mira as its interface), life admin, finance from the user's own app "Atlas", and a re-ranked world overview. What separates it from another calendar overview is that every proactive item cites the user's own strategy or knowledge notes ("this touches your Q4 positioning").
 
-Status: Phase 0a, the clickable mockup (2026-10-31). Everything on screen is fixture data. There is no daemon, no network access and no API key in this repo yet.
+Status (2026-10-31): the mockup screens are an accepted **draft**. Phase 1 is built: a local daemon (loopback server, SQLite, Claude Code hook monitor, Secretary lane with a zero-token fake Claude and an Agent SDK backend) and a web client that talks to it. The long-term direction is a live 3D character in an empty "cerebral space" (see [docs/CEREBRAL-SPACE.md](docs/CEREBRAL-SPACE.md)); the engine-agnostic contract for it is drafted in `packages/shared/src/stage.ts`. Nothing has been run against live Claude or on Windows yet.
 
 ## Quick start
 
@@ -18,13 +18,23 @@ Open http://127.0.0.1:5173.
 - Add `?static` to the URL (http://127.0.0.1:5173/?static) to freeze the live simulator. Without it the fake daemon pushes agent ticks every 5 s, a new approval about 40 s in, and streams chat replies. `?static` is what the screenshots and the smoke test use.
 - Nothing in the mockup needs a `.env`. `.env.example` documents the settings the daemon will use from Phase 1.
 
+### Run it against the real daemon (zero tokens, fake Claude)
+
+```
+pnpm --filter @ai-assistant/web build
+pnpm --filter @ai-assistant/daemon start
+```
+
+The daemon prints a one-time sign-in link (`http://127.0.0.1:7421/?code=...`); open it. Chat, Work and approvals are then live; Today, Brain, Life, Money and World still show sample data and say so. `pnpm --filter @ai-assistant/daemon hooks print` shows the Claude Code hook configuration (it changes nothing). See [apps/daemon/README.md](apps/daemon/README.md).
+
 ## Scripts
 
 | Command | What it does |
 |---|---|
 | `pnpm dev` | Vite dev server for `apps/web` on 127.0.0.1:5173 |
 | `pnpm typecheck` | `tsc` in every workspace package |
-| `pnpm test` | Vitest in `packages/shared` (fixtures validate against the zod schemas, cross-references hold) |
+| `pnpm test` | Vitest in `packages/shared` (fixtures and contracts), `packages/agent-core` (lane, backends, parser) and `apps/daemon` (security, hooks, store, WebSocket) |
+| `pnpm --filter @ai-assistant/web e2e` | End-to-end: a real daemon process and a real browser (sign-in, live hooks, chat, approvals, reconnect, restart) |
 | `pnpm build` | Typecheck and production build of `apps/web` into `apps/web/dist` |
 | `pnpm --filter @ai-assistant/web preview` | Serve the production build on 127.0.0.1:4173 |
 | `node apps/web/scripts/smoke.mjs` | Playwright smoke test through every screen (needs Playwright with Chromium; see the header of the script) |
@@ -42,7 +52,10 @@ apps/
     src/state/store.ts    Zustand store; the only place the UI holds app state
     src/api/              ApiClient wiring (index.ts) and the in-memory FixtureClient
     src/components/       Shared UI: Panel, Badge, Gauge, ApprovalCard, NoteChip, SessionMini ...
+apps/
+  daemon/                 Local daemon: loopback Hono + WebSocket, SQLite store, hook receiver, lane wiring, hook installer CLI
 packages/
+  agent-core/             Claude lanes: fake and Agent SDK backends, Secretary lane, emotion tags, permissions, budgets
   shared/                 Contracts shared by the UI and, later, the daemon
     src/schemas/          zod schemas and types (Session, Approval, Note, Proposal, Briefing, Snapshot ...)
     src/providers.ts      Provider interfaces (Finance, Calendar, Mail, Contacts, News, Weather)
@@ -53,7 +66,6 @@ docs/                     Plan, architecture, ADRs, persona and privacy specs, r
 spikes/                   Phase 0b scripts, to be run later on the user's own Windows PC
 ```
 
-`apps/daemon` does not exist yet; it is created in Phase 1.
 
 ## How the mockup is structured
 

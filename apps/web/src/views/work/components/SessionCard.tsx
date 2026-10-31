@@ -1,6 +1,7 @@
 import type { Session } from '@ai-assistant/shared'
-import { CheckCircle2, MessageCircleQuestion, Send, ShieldAlert, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, MessageCircleQuestion, Send, ShieldAlert, Terminal, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
+import { TERMINAL_ONLY_COPY, useApiMode } from '../../../api'
 import { ApprovalCard } from '../../../components/ApprovalCard'
 import { Button, Gauge, StatusDot } from '../../../components/ui'
 import { cn } from '../../../lib/cn'
@@ -10,6 +11,24 @@ import { useSnap, useStore } from '../../../state/store'
 import { rel } from '../lib'
 import { useWork } from '../ui'
 import { BranchChip, ModelBadge, ProjectChip, SourceBadge, StatusText } from './Atoms'
+
+/**
+ * With the real daemon, a session seen only through Claude Code hooks can be watched but not answered: hooks are
+ * non-blocking, so there is nothing for an Approve, Deny or Reply button to talk to. (The mockup fakes those controls.)
+ */
+export function useWatchOnly(session: Session): boolean {
+  const daemon = useApiMode() === 'daemon'
+  return daemon && session.source === 'hook' && (session.status === 'blocked_permission' || session.status === 'waiting_input')
+}
+
+export function TerminalOnlyNote({ className }: { className?: string }) {
+  return (
+    <div className={cn('flex items-center gap-2 rounded-lg border border-warn/30 bg-warn/[0.06] px-2.5 py-2 text-[12px] text-fg', className)}>
+      <Terminal className="size-3.5 shrink-0 text-warn" aria-hidden />
+      <p data-testid="terminal-only-note">{TERMINAL_ONLY_COPY}</p>
+    </div>
+  )
+}
 
 /** Inline reply for a session that stopped to ask a question. Local only in the mockup. */
 function ReplyBox({ session }: { session: Session }) {
@@ -72,6 +91,7 @@ export function SessionCard({ session, selected }: { session: Session; selected:
   const select = useWork((s) => s.selectSession)
   const setTab = useWork((s) => s.setTab)
   const st = SESSION_STATUS[session.status]
+  const watchOnly = useWatchOnly(session)
   const main = session.agents[0]
   const running = session.status === 'running'
   const detailLine =
@@ -136,7 +156,9 @@ export function SessionCard({ session, selected }: { session: Session; selected:
         </div>
       </div>
 
-      {session.status === 'blocked_permission' &&
+      {watchOnly && <TerminalOnlyNote className="relative z-10 mt-3" />}
+      {!watchOnly &&
+        session.status === 'blocked_permission' &&
         (approvalId ? (
           <div className="relative z-10 mt-3">
             <ApprovalCard id={approvalId} variant="compact" className="border-bad/30 bg-bad/[0.05]" />
@@ -150,7 +172,7 @@ export function SessionCard({ session, selected }: { session: Session; selected:
             </Button>
           </div>
         ))}
-      {session.status === 'waiting_input' && <ReplyBox session={session} />}
+      {!watchOnly && session.status === 'waiting_input' && <ReplyBox session={session} />}
     </article>
   )
 }

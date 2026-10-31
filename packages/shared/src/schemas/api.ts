@@ -22,6 +22,10 @@ export const Snapshot = z.object({
   now: IsoDateTime,
   /** Sequence number of the last event already reflected in this snapshot, so a refetch lines up with the event stream. */
   seq: z.number().int().nonnegative().optional(),
+  /** Daemon process epoch the seq belongs to (also in the X-Daemon-Epoch header). A different epoch means seq values are not comparable. */
+  epoch: z.string().optional(),
+  /** Screens whose data is still sample data, so the UI can say so honestly. Absent = nothing is mock (or this is the mockup). */
+  mockSections: z.array(z.enum(['briefing', 'brain', 'life', 'money', 'world'])).optional(),
   briefing: Briefing,
   learned: z.array(LearnedFact),
   chat: z.array(ChatMessage),
@@ -70,6 +74,8 @@ export const ServerEvent = z.discriminatedUnion('type', [
     status: z.enum(['approved', 'denied']),
   }),
   z.object({ ...base, type: z.literal('task.update'), task: Task }),
+  z.object({ ...base, type: z.literal('task.removed'), id: Id }),
+  z.object({ ...base, type: z.literal('project.update'), project: Project }),
   z.object({ ...base, type: z.literal('proposal.update'), proposal: Proposal }),
   z.object({ ...base, type: z.literal('settings.update'), settings: SettingsSnapshot }),
   z.object({ ...base, type: z.literal('learned.update'), learned: z.array(LearnedFact) }),

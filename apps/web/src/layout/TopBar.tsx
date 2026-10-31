@@ -1,8 +1,10 @@
 import { Bell, Camera, CloudSun, Command, Cpu } from 'lucide-react'
+import { useApiUi } from '../api'
 import { Badge, Kbd, Segmented, StatusDot } from '../components/ui'
 import { fmtDay, fmtUsd } from '../lib/format'
 import { useCostToday } from '../state/derived'
 import { pendingApprovals, useStore, type Preset } from '../state/store'
+import { useLinkDown } from './ConnectionBanner'
 
 const PRESETS: Array<{ value: Preset; label: string; title: string }> = [
   { value: 'briefing', label: 'Briefing', title: 'Quarter-size Room, Today on stage' },
@@ -18,6 +20,8 @@ export function TopBar() {
   const setPalette = useStore((s) => s.setPalette)
   const navigate = useStore((s) => s.navigate)
   const spent = useCostToday()
+  const { mode, backend } = useApiUi()
+  const linkDown = useLinkDown()
   if (!data) return null
 
   const pending = pendingApprovals(data).length
@@ -56,6 +60,28 @@ export function TopBar() {
             <Camera className="size-3" /> Camera on
           </Badge>
         )}
+        <span data-testid="mode-badge" data-mode={mode} data-link={mode === 'daemon' && linkDown ? 'down' : 'up'}>
+          {mode === 'fixtures' ? (
+            <Badge title="Mockup: built-in sample data. Nothing here is real and nothing is saved.">Mockup</Badge>
+          ) : linkDown ? (
+            <Badge tone="warn" title="The daemon is not answering. You are looking at the last data received.">
+              Offline
+            </Badge>
+          ) : (
+            <span className="inline-flex items-center gap-1">
+              <Badge tone="ok" title="Live: connected to your local daemon.">
+                Live
+              </Badge>
+              {backend === 'fake' && (
+                <span className="hidden lg:inline-flex">
+                  <Badge tone="warn" title="The daemon's Claude backend is the zero-token stand-in: chat replies are scripted, nothing talks to Claude.">
+                    fake Claude
+                  </Badge>
+                </span>
+              )}
+            </span>
+          )}
+        </span>
         <button
           type="button"
           onClick={() => navigate('settings', { tab: 'claude' })}

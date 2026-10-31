@@ -1,5 +1,5 @@
 import { ArrowUpRight, Check, ShieldAlert, X } from 'lucide-react'
-import { api } from '../api'
+import { TERMINAL_ONLY_COPY, api, useApiMode } from '../api'
 import { cn } from '../lib/cn'
 import { timeAgo } from '../lib/format'
 import { APPROVAL_KIND_LABEL, RISK_TONE, TIER_LABEL } from '../lib/status'
@@ -15,9 +15,13 @@ export function ApprovalCard({ id, variant = 'full', className }: { id: string; 
   const ap = useStore((s) => s.data?.approvals.find((a) => a.id === id))
   const now = useStore((s) => s.now)
   const navigate = useStore((s) => s.navigate)
+  const mode = useApiMode()
+  const session = useStore((s) => s.data?.sessions.find((x) => x.id === ap?.sessionId))
   if (!ap) return null
 
   const pending = ap.status === 'pending'
+  // Hooks are non-blocking, so a permission asked in the user's own terminal can only be answered there.
+  const terminalOnly = pending && mode === 'daemon' && session?.source === 'hook'
   const review = () => {
     if (ap.area === 'work') navigate('work', { tab: 'approvals', approval: ap.id, ...(ap.sessionId ? { session: ap.sessionId } : {}) })
     else if (ap.area === 'brain') navigate('brain', { tab: 'proposals', ...(ap.refId ? { proposal: ap.refId } : {}) })
@@ -56,7 +60,9 @@ export function ApprovalCard({ id, variant = 'full', className }: { id: string; 
       </div>
 
       <div className="mt-2.5 flex items-center gap-1.5">
-        {pending ? (
+        {pending && terminalOnly ? (
+          <p className="text-[11px] text-muted" data-testid="terminal-only-note">{TERMINAL_ONLY_COPY}</p>
+        ) : pending ? (
           <>
             <Button variant="ok" onClick={() => void api.decideApproval(ap.id, 'approved')}>
               <Check className="size-3.5" /> Approve

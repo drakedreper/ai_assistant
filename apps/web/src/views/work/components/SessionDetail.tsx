@@ -11,6 +11,7 @@ import { rel } from '../lib'
 import { useWork } from '../ui'
 import { BranchChip, ModelBadge, ProjectChip, SourceBadge } from './Atoms'
 import { EventTimeline } from './EventTimeline'
+import { TerminalOnlyNote, useWatchOnly } from './SessionCard'
 import { SubagentTree } from './SubagentTree'
 
 function Section({ title, count, children, hint }: { title: string; count?: number; children: ReactNode; hint?: string }) {
@@ -89,6 +90,7 @@ export function SessionDetail({ session }: { session: Session }) {
   const flash = useWork((s) => s.flash)
   const extraLinks = useWork((s) => s.extraLinks)
   const st = SESSION_STATUS[session.status]
+  const watchOnly = useWatchOnly(session)
   const active = session.status === 'running' || st.needsYou
   const canInterrupt = active && session.source === 'sdk'
   const linked = tasks.filter((t) => t.sessionIds.includes(session.id) || (extraLinks[t.id] ?? []).includes(session.id))
@@ -147,6 +149,8 @@ export function SessionDetail({ session }: { session: Session }) {
             <LinkToCard session={session} linked={linked} />
           </div>
         </header>
+
+        {watchOnly && <TerminalOnlyNote className="mx-4 mb-3" />}
 
         {latest && (
           <Section title={session.error ? 'What went wrong' : session.summary ? 'Summary' : 'Latest message'}>

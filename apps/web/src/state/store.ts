@@ -8,7 +8,7 @@ import type {
   Snapshot,
 } from '@ai-assistant/shared'
 import { create } from 'zustand'
-import { api } from '../api'
+import { api, apiReady } from '../api'
 import type { View } from '../lib/areas'
 
 export type RoomMode = 'mini' | 'quarter' | 'half' | 'full'
@@ -115,6 +115,8 @@ export const useStore = create<AppState>((set, get) => ({
 
   // One shared promise: React StrictMode (dev) calls init twice, and a second subscription would apply every event twice.
   init: () => (initPromise ??= (async () => {
+    // The backend (mockup or daemon) is chosen and verified first; only then is there anything to read.
+    await apiReady
     const data = await api.getSnapshot()
     set({
       data,
@@ -201,6 +203,10 @@ export const useStore = create<AppState>((set, get) => ({
           }
         case 'task.update':
           return { data: { ...d, tasks: upsertById(d.tasks, e.task) } }
+        case 'task.removed':
+          return { data: { ...d, tasks: d.tasks.filter((t) => t.id !== e.id) } }
+        case 'project.update':
+          return { data: { ...d, projects: upsertById(d.projects, e.project) } }
         case 'proposal.update':
           return { data: { ...d, proposals: upsertById(d.proposals, e.proposal) } }
         case 'settings.update':

@@ -46,6 +46,19 @@ export const TaskCreateRequest = z.object({
   column: TaskColumn.optional(),
 })
 export const TaskMoveRequest = z.object({ column: TaskColumn })
+export const TaskPatchRequest = z.object({
+  column: TaskColumn.optional(),
+  title: z.string().min(1).max(200).optional(),
+  description: z.string().max(2000).optional(),
+  priority: z.enum(['low', 'medium', 'high']).optional(),
+})
+export type TaskPatchRequest = z.infer<typeof TaskPatchRequest>
+
+/** Error body returned by every non-2xx API response. */
+export const ApiError = z.object({ error: z.string(), message: z.string(), details: z.unknown().optional() })
+export type ApiError = z.infer<typeof ApiError>
+
+export const AuthExchangeResponse = z.object({ ok: z.literal(true) })
 export const TrustModeRequest = z.object({ mode: z.enum(['ask', 'auto']) })
 export const ClaudeModeRequest = z.object({ mode: z.enum(['api-key', 'local-login']) })
 export const OnOffRequest = z.object({ on: z.boolean() })
@@ -60,6 +73,9 @@ export const WsHello = z.object({
   epoch: z.string(),
   backend: z.enum(['fake', 'sdk']),
   version: z.string(),
+  /** True when the requested resume point cannot be served (older than the replay buffer, or a different epoch). Refetch the snapshot. */
+  resync: z.boolean().optional(),
+  reason: z.string().optional(),
 })
 export type WsHello = z.infer<typeof WsHello>
 
@@ -100,6 +116,9 @@ export const HookPayload = z
     model: z.string().optional(),
     source: z.string().optional(),
     reason: z.string().optional(),
+    last_assistant_message: z.string().optional(),
+    error: z.unknown().optional(),
+    parent_agent_id: z.string().optional(),
   })
   .passthrough()
 export type HookPayload = z.infer<typeof HookPayload>
