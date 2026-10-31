@@ -225,3 +225,5 @@ Revised order of work:
 What the user must do for tests on their PC: connect it through Remote Control (Claude Desktop app, Settings, Claude Code, Remote Control, or `claude remote-control` in a terminal in the repo folder). Then the spikes in `spikes/` and the GPU/engine measurements can run on the RTX 5070 Ti.
 
 The long-term interface is the cerebral space described in [CEREBRAL-SPACE.md](CEREBRAL-SPACE.md): an empty void where the user's representation and the second brain live, with the knowledge graph, Claude sessions and an interactive terminal as objects in it.
+
+Decision (2026-10-31): Windows and GPU testing runs through Claude Code on the user's own PC, using [PC-BRINGUP.md](PC-BRINGUP.md) and `spikes/pc/KICKOFF-PROMPT.md`. The cloud session cannot reach that machine.

@@ -3,3 +3,4 @@
 *.jsonl
 node_modules/
 package-lock.json
+pc/system-info.json
