@@ -1,5 +1,4 @@
 import type { Hono } from 'hono'
-import { bodyLimit } from 'hono/body-limit'
 import type { Context } from 'hono'
 import type { ZodType } from 'zod'
 import { z } from 'zod'
@@ -54,6 +53,27 @@ async function readCapped(req: Request, max: number): Promise<string | null> {
   return Buffer.concat(chunks).toString('utf8')
 }
 
+/**
+ * Cap request bodies on /api/*. Hono's own bodyLimit rebuilds the Request when there is no Content-Length, and that
+ * throws on the node adapter's request object (a bare DELETE from a browser, or any chunked upload, became a 500).
+ * This version never rebuilds anything: a declared length is checked as is, no body passes, and a body without a
+ * declared length is read under the cap and handed back through Hono's body cache for c.req.json() and text().
+ */
+async function limitApiBody(c: Context, next: () => Promise<void>): Promise<Response | void> {
+  const tooLarge = () => c.json({ error: 'payload_too_large', message: 'Request body is too large' }, 413)
+  const declared = c.req.header('content-length')
+  if (declared !== undefined) {
+    if (Number(declared) > MAX_API_BODY) return tooLarge()
+    return next()
+  }
+  if (!c.req.raw.body) return next()
+  const text = await readCapped(c.req.raw, MAX_API_BODY)
+  if (text === null) return tooLarge()
+  // Hono keeps the pending read in bodyCache (typed as the value, stored as a promise); json() and text() reuse it.
+  ;(c.req.bodyCache as Record<string, unknown>).text = Promise.resolve(text)
+  return next()
+}
+
 async function parseBody<T>(c: Context, schema: ZodType<T>): Promise<T> {
   let raw: unknown
   try {
@@ -75,7 +95,7 @@ async function parseBody<T>(c: Context, schema: ZodType<T>): Promise<T> {
 
 /** Browser-facing REST routes, the exchange route and the hook receiver. Guards run before any of these. */
 export function registerRoutes(app: Hono, ctx: DaemonContext, commands: Commands = new Commands(ctx)): void {
-  app.use('/api/*', bodyLimit({ maxSize: MAX_API_BODY, onError: (c) => c.json({ error: 'payload_too_large', message: 'Request body is too large' }, 413) }))
+  app.use('/api/*', limitApiBody)
 
   // ---------------------------------------------------------------- open: exchange the one-time code for a cookie
   app.post(DaemonRoutes.authExchange, async (c) => {

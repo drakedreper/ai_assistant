@@ -9,7 +9,8 @@
     "start": "tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "hooks": "tsx src/cli/hooks.ts"
+    "hooks": "tsx src/cli/hooks.ts",
+    "stage": "tsx src/stage/cli.ts"
   },
   "dependencies": {
     "@ai-assistant/agent-core": "workspace:*",

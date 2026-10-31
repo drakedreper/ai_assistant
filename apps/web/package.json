@@ -9,7 +9,9 @@
     "build:single": "vite build --mode single --outDir dist-single",
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
-    "e2e": "node scripts/e2e-daemon.mjs"
+    "e2e": "node scripts/e2e-daemon.mjs",
+    "e2e:terminal": "node scripts/e2e-terminal.mjs",
+    "e2e:stage": "node scripts/e2e-stage.mjs"
   },
   "dependencies": {
     "@ai-assistant/shared": "workspace:*",

@@ -4,3 +4,5 @@ export { MIGRATIONS, LATEST_VERSION, migrate, MigrationError } from './migration
 export type { Migration } from './migrations'
 export { createLaneStore, createRecordingBudget, hydrateBudget } from './laneStore'
 export * from './redact'
+export { StageStore } from './stageStore'
+export type { AssetSource, MoodRow, StoredAsset } from './stageStore'

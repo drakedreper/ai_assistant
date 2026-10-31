@@ -10,6 +10,9 @@ export function classify(path: string): RouteClass {
   if (path === '/hooks' || path.startsWith('/hooks/')) return 'hook'
   if (path === DaemonRoutes.authExchange) return 'exchange'
   if (path === '/api' || path.startsWith('/api/') || path === DaemonRoutes.ws) return 'browser'
+  // A plain HTTP request to a terminal socket path needs the cookie like any browser route (the real upgrade is
+  // checked in src/terminal/ws.ts, which never goes through this middleware).
+  if (path.startsWith('/ws/terminal/')) return 'browser'
   return 'static'
 }
 

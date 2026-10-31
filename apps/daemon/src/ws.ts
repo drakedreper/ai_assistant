@@ -22,6 +22,12 @@ export interface SocketLike {
 
 const OPEN = 1
 
+/**
+ * Paths served by other upgrade listeners: this handler must not answer (or destroy) those sockets. `/ws/stage` is the
+ * engine's own door (bearer token, no cookie): src/stage/upgrade.ts answers everything under it, including a wrong path.
+ */
+const OTHER_WS_PREFIXES = ['/ws/terminal/', '/ws/stage']
+
 export interface WsOptions {
   maxClients: number
   heartbeatMs: number
@@ -100,6 +106,8 @@ export function attachWebSocket(opts: {
       return rejectUpgrade(socket, 400, 'bad_request')
     }
     if (url.pathname !== DaemonRoutes.ws) {
+      // Other WebSocket endpoints (embedded terminals) attach their own 'upgrade' listener and answer for their paths.
+      if (OTHER_WS_PREFIXES.some((p) => url.pathname.startsWith(p))) return
       stats.rejected++
       return rejectUpgrade(socket, 404, 'not_found')
     }

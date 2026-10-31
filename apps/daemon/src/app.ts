@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { createAdaptorServer } from '@hono/node-server'
 import { Hono } from 'hono'
-import type { BudgetGuard, ChatMessage, LaneDeps, LaneId, SecretaryLane } from '@ai-assistant/shared'
+import type { BudgetGuard, ChatMessage, LaneDeps, LaneId, SecretaryLane, ToolBinding } from '@ai-assistant/shared'
 import { EventBus } from './bus'
 import { Commands } from './commands'
 import type { DaemonConfig } from './config'
@@ -19,17 +19,29 @@ import { createLogger, type Logger } from './log'
 import { registerRoutes } from './routes'
 import { createSecurity, type Security } from './security'
 import { LANE_DEFAULTS, SnapshotBuilder } from './snapshot'
+import { createStageFeature, type StageFeature, type StageOverrides } from './stage/feature'
 import { createStaticHandler } from './static'
+import { createTerminalFeature, type TerminalFeature, type TerminalOverrides } from './terminal/mount'
 import { createLaneStore, createRecordingBudget, hydrateBudget, openStore, type Store } from './store'
 import { attachWebSocket, type WsHub } from './ws'
 
 /** What a lane needs from the daemon: LaneDeps minus the parts the composition root chooses (backend, tools). */
 export type LaneContext = Omit<LaneDeps, 'backend' | 'tools'>
 
+/** Extra things the lane factory may use that are not part of LaneDeps: the stage tools (STAGE_TOOL_SURFACE) to merge into the lane's tools. */
+export interface LaneExtras {
+  stageTools: ToolBinding[]
+  /**
+   * What she remembers about the two of them, for the persona prompt (`LaneOptions.digest`). CLOUD audience: private and
+   * sensitive memories are left out (docs/PRIVACY.md). Undefined while the stage backend is off or nothing is remembered.
+   */
+  memoryDigest: () => string | undefined
+}
+
 export interface CreateDaemonOptions {
   config: DaemonConfig
-  /** The lane, or a factory that receives the daemon-owned seams (emit, SQLite LaneStore, budget). */
-  lane: SecretaryLane | ((ctx: LaneContext) => SecretaryLane)
+  /** The lane, or a factory that receives the daemon-owned seams (emit, SQLite LaneStore, budget) and the stage tools to merge in. */
+  lane: SecretaryLane | ((ctx: LaneContext, extras: LaneExtras) => SecretaryLane)
   /** The underlying BudgetGuard (agent-core's createBudgetGuard). The daemon wraps it to persist spend. */
   budget: BudgetGuard
   /** Inject an already-open store (tests). The daemon only closes stores it opened itself. */
@@ -43,6 +55,10 @@ export interface CreateDaemonOptions {
   newId?: IdGen
   /** Hook staleness thresholds etc. Defaults come from the config. */
   projection?: Partial<typeof DEFAULT_PROJECTION_CONFIG>
+  /** Embedded terminals: replace the PTY factory, tree killer, platform or file system (tests). */
+  terminals?: TerminalOverrides
+  /** The stage backend: replace the TTS, the face provider, the timers, the RNG or the brain notes (tests, real engines later). */
+  stage?: StageOverrides
 }
 
 export interface StartInfo {
@@ -61,6 +77,10 @@ export interface Daemon {
   readonly security: Security
   readonly lane: SecretaryLane
   readonly commands: Commands
+  /** The embedded terminals (off until the user switches them on in Settings). */
+  readonly terminals: TerminalFeature
+  /** The live 3D assistant backend: characters, wardrobe, scene, mood, behaviour and the stage socket (on by default). */
+  readonly stage: StageFeature
   /** Listen on 127.0.0.1 (config.port, 0 for an ephemeral port), attach the WebSocket hub, start the lane. */
   start(): Promise<StartInfo>
   /** Graceful shutdown: interrupt and stop the lane, stop timers, close sockets, drain hooks, close the DB. */
@@ -93,7 +113,8 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
     now: clock,
   })
   // Exact secrets the daemon holds; every log line and stored summary is masked against them.
-  const literals = () => [security.hookToken(), ...(config.apiKey ? [config.apiKey] : [])]
+  // (the stage token too: it must never reach a log line or a stored summary, and if it ever did it would be masked)
+  const literals = () => [security.hookToken(), security.stageToken(), ...(config.apiKey ? [config.apiKey] : [])]
   const log = opts.log ?? createLogger({ level: config.logLevel, literals })
 
   const bus = new EventBus({ bufferSize: config.busBufferSize, now })
@@ -111,8 +132,10 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
   let commands: Commands | undefined
   let wsHub: WsHub | undefined
   let server: Server | undefined
+  let terminals: TerminalFeature | undefined
+  let stage: StageFeature | undefined
 
-  const snapshots = new SnapshotBuilder({ config, store, bus, budget, lane: () => lane, now })
+  const snapshots = new SnapshotBuilder({ config, store, bus, budget, lane: () => lane, now, terminals: () => terminals, stage: () => stage })
 
   const announceReset = (): void => {
     bus.publishLazy((seq) => ({ type: 'snapshot.reset', snapshot: { ...snapshots.build(), seq } }))
@@ -169,7 +192,21 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
     cwd: join(config.dataDir, 'agent'),
     env: { ...(config.apiKey ? { apiKey: config.apiKey } : {}), ...(config.claudeExecutable ? { claudeExecutable: config.claudeExecutable } : {}) },
   }
-  const theLane: SecretaryLane = typeof opts.lane === 'function' ? opts.lane(laneCtx) : opts.lane
+  // The stage backend exists before the lane: its tools are merged into the lane's tools by the lane factory, and it
+  // listens to the same bus the lane publishes on (chat, avatar, approvals).
+  stage = createStageFeature({
+    config,
+    store,
+    bus,
+    security,
+    log,
+    now,
+    clock,
+    newId,
+    persona: () => snapshots.persona(),
+    ...(opts.stage ? { overrides: opts.stage } : {}),
+  })
+  const theLane: SecretaryLane = typeof opts.lane === 'function' ? opts.lane(laneCtx, { stageTools: stage.toolBindings(), memoryDigest: () => stage?.hub.memoryDigest() }) : opts.lane
   lane = theLane
 
   const ctx: DaemonContext = {
@@ -191,6 +228,20 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
     announceReset,
   }
   commands = new Commands(ctx)
+  commands.onInterrupt = () => void stage?.hub.bargeIn()
+  terminals = createTerminalFeature({
+    config,
+    store,
+    security,
+    bus,
+    log,
+    now,
+    clock,
+    newId,
+    settings: () => snapshots.settings(),
+    announceReset,
+    ...(opts.terminals ? { overrides: opts.terminals } : {}),
+  })
 
   // ---------------------------------------------------------------- boot-time state
   // A pending approval from a previous run belongs to a Claude turn that no longer exists: close it.
@@ -223,6 +274,8 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
   app.use('*', securityHeaders())
   app.use('*', guards(security, log))
   registerRoutes(app, ctx, commands)
+  terminals.registerRoutes(app)
+  stage.registerRoutes(app)
   const serveStatic = createStaticHandler({ root: config.webDist, security })
   app.get('*', serveStatic)
 
@@ -236,6 +289,8 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
     security,
     lane: theLane,
     commands,
+    terminals,
+    stage,
 
     address: () => (server?.address() as AddressInfo | null) ?? undefined,
 
@@ -266,6 +321,9 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
         options: { maxClients: config.wsMaxClients, heartbeatMs: config.wsHeartbeatMs, maxBufferedBytes: config.wsMaxBufferedBytes },
         log,
       })
+      terminals?.attach(s)
+      stage?.attach(s)
+      stage?.start()
       hooks.start()
 
       try {
@@ -283,6 +341,10 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
       if (stopped) return
       stopped = true
       hooks.stop()
+      // Terminals first: every PTY and its whole process tree is killed before the sockets and the database go away.
+      await terminals?.shutdown().catch((err: unknown) => log.warn('terminal shutdown failed', { error: err instanceof Error ? err.message : 'unknown' }))
+      // The stage next: its socket is closed (going away) and the mood is saved before the database goes.
+      await stage?.shutdown().catch((err: unknown) => log.warn('stage shutdown failed', { error: err instanceof Error ? err.message : 'unknown' }))
       await wsHub?.close().catch(() => {})
       if (server) {
         const s = server

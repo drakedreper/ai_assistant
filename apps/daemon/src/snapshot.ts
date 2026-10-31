@@ -11,6 +11,8 @@ import type {
   SecretaryLane,
   SettingsSnapshot,
   Snapshot,
+  StageSnapshot,
+  TerminalInfo,
   TrustRule,
   UsageBlock,
 } from '@ai-assistant/shared'
@@ -41,6 +43,8 @@ export const KV = {
   webcam: 'settings.webcam',
   proposals: 'brain.proposalDecisions',
   forgotten: 'brain.forgottenFacts',
+  /** Embedded terminals switch (boolean). Absent means off: a fresh install never exposes a terminal. */
+  terminals: 'settings.terminals',
   demoSeeded: 'demo.seeded',
 } as const
 
@@ -50,6 +54,17 @@ export type ProposalDecisions = Record<string, { status: 'approved' | 'rejected'
 /** Approvals without a single rejection promote to "suggest auto" at this many (ADR 0005 proposes roughly 10 to 15). */
 export const PROMOTION_THRESHOLD = 10
 
+/** What the snapshot needs from the embedded terminal feature (src/terminal/mount.ts). */
+export interface TerminalSnapshotSource {
+  enabled(): boolean
+  list(): TerminalInfo[]
+}
+
+/** What the snapshot needs from the stage backend (src/stage). */
+export interface StageSnapshotSource {
+  snapshot(): StageSnapshot
+}
+
 export interface SnapshotDeps {
   config: DaemonConfig
   store: Store
@@ -58,6 +73,10 @@ export interface SnapshotDeps {
   /** The lane is built after the snapshot builder (the lane factory may ask for the Claude connection), so it can be undefined early on. */
   lane: () => SecretaryLane | undefined
   now: () => Date
+  /** The terminal feature is built after the snapshot builder, like the lane, so it can be undefined early on. */
+  terminals?: () => TerminalSnapshotSource | undefined
+  /** The stage backend is built before the lane but after the snapshot builder, so it can be undefined early on. */
+  stage?: () => StageSnapshotSource | undefined
 }
 
 function addInto(into: Record<string, number>, from: Record<string, number>): void {
@@ -171,6 +190,7 @@ export class SnapshotBuilder {
       privacy: fx.settings.privacy,
       guestMode: store.kvGet<boolean>(KV.guest) ?? false,
       webcam: { enabled: store.kvGet<boolean>(KV.webcam) ?? false, retention: 'none' },
+      terminals: { enabled: this.deps.terminals?.()?.enabled() ?? store.kvGet<boolean>(KV.terminals) === true },
       ...(config.demo && fx.settings.vault ? { vault: fx.settings.vault } : {}),
     }
   }
@@ -268,6 +288,9 @@ export class SnapshotBuilder {
       contacts: fx.contacts,
       finance: fx.finance,
       world: fx.world,
+      terminals: this.deps.terminals?.()?.list() ?? [],
+      // The live 3D assistant backend: the characters, her wardrobe, the scene, her mood and the attached stage.
+      ...(this.deps.stage?.() ? { stage: this.deps.stage()!.snapshot() } : {}),
       settings: this.settings(fx),
     }
   }

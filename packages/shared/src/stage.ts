@@ -355,6 +355,9 @@ export const GraphNode = z.object({
   /** Layout computed by the backend so every engine draws the same constellation. */
   position: Vec3.optional(),
   color: z.string().optional(),
+  /** Visual hints derived from importance by the backend (node radius in metres, glow 0..1). Additive, optional. */
+  size: z.number().positive().optional(),
+  brightness: z.number().min(0).max(1).optional(),
 })
 export const GraphEdge = z.object({ from: z.string(), to: z.string(), weight: z.number().default(1) })
 export type GraphNode = z.infer<typeof GraphNode>
@@ -433,6 +436,17 @@ export const StageCommand = z.discriminatedUnion('type', [
     nodes: z.array(GraphNode).optional(),
     edges: z.array(GraphEdge).optional(),
     items: z.array(z.record(z.string(), z.unknown())).optional(),
+    /**
+     * Removals for 'merge' mode (additive, optional): node ids (their edges go with them), edges by endpoints and item
+     * ids. Lets the backend send minimal diffs instead of replacing the whole construct every tick.
+     */
+    remove: z
+      .object({
+        nodes: z.array(z.string()).optional(),
+        edges: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
+        items: z.array(z.string()).optional(),
+      })
+      .optional(),
   }),
   /** Terminal bytes (ANSI) from the daemon's PTY for a terminal_pane construct. */
   z.object({ ...cmdBase, type: z.literal('construct.terminal.write'), constructId: z.string(), data: z.string() }),
@@ -495,6 +509,11 @@ export type StageEvent = z.infer<typeof StageEvent>
  * - Face:   ARKit weights, one f32 per entry of ARKIT_52 in canonical order, 30 fps. Audio2Face-3D also emits extra
  *           tongue shapes; their order must be confirmed against the SDK before they are added (see ADR 0008).
  * - Body:   reserved for future retargeted joint streams.
+ *
+ * Details fixed by packages/stage-core (src/protocol/frames.ts), which has the reference encoder/decoder:
+ * - utteranceIdHash is FNV-1a 32-bit over the UTF-8 bytes of the utteranceId.
+ * - A face message carries k >= 1 consecutive frames (payload = k * 208 bytes); frame i is at tStartMs + i * 1000/30.
+ * - Decoders reject truncated frames, unknown kinds, non-finite times or weights and misaligned payloads.
  */
 export const BinaryFrameKind = { audio: 1, face: 2, body: 3 } as const
 export type BinaryFrameKind = (typeof BinaryFrameKind)[keyof typeof BinaryFrameKind]
@@ -536,6 +555,14 @@ export const StageSnapshot = z.object({
     connected: z.boolean(),
     engine: StageEngine.optional(),
     capabilities: StageCapabilities.optional(),
+    /** Additive, optional: ISO time the current connection became ready. */
+    since: z.string().optional(),
   }),
+  /** Additive, optional: monotonic revision of this snapshot (see StageLive.rev in daemon.ts). */
+  rev: z.number().int().nonnegative().optional(),
+  /** Additive, optional: what the OutfitDirector would have the assistant wear now, with its reason. */
+  outfitSuggestion: z.object({ presetId: z.string(), presetName: z.string(), explanation: z.string(), changed: z.boolean() }).nullable().optional(),
+  /** Additive, optional: shot ids the working scene has (wide, medium, closeup, ...). */
+  cameraShots: z.array(z.string()).optional(),
 })
 export type StageSnapshot = z.infer<typeof StageSnapshot>

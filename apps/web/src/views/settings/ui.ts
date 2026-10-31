@@ -5,9 +5,9 @@ import { create } from 'zustand'
  * leave and come back, and the chosen section, lane switches and snoozed promotions should survive that.
  * Domain data (persona, trust rules, privacy switches) stays in the snapshot and changes through the ApiClient.
  */
-export type SettingsSection = 'persona' | 'claude' | 'integrations' | 'trust' | 'privacy' | 'audit' | 'memory'
+export type SettingsSection = 'persona' | 'claude' | 'integrations' | 'trust' | 'privacy' | 'stage' | 'audit' | 'memory'
 
-export const SECTIONS: SettingsSection[] = ['persona', 'claude', 'integrations', 'trust', 'privacy', 'audit', 'memory']
+export const SECTIONS: SettingsSection[] = ['persona', 'claude', 'integrations', 'trust', 'privacy', 'stage', 'audit', 'memory']
 
 /** Deep links from other screens may use friendlier names. */
 const ALIASES: Record<string, SettingsSection> = {
@@ -21,6 +21,10 @@ const ALIASES: Record<string, SettingsSection> = {
   'trust-ladder': 'trust',
   approvals: 'trust',
   privacy: 'privacy',
+  stage: 'stage',
+  room: 'stage',
+  character: 'stage',
+  wardrobe: 'stage',
   audit: 'audit',
   'audit-log': 'audit',
   memory: 'memory',

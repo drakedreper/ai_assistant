@@ -1,4 +1,4 @@
-import { Brain, Cpu, Plug, ScrollText, ShieldCheck, UserRound, Lock, type LucideIcon } from 'lucide-react'
+import { Brain, Cpu, Drama, Plug, ScrollText, ShieldCheck, UserRound, Lock, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { StatusDot } from '../../components/ui'
 import { cn } from '../../lib/cn'
@@ -9,6 +9,7 @@ import { IntegrationsSection } from './components/IntegrationsSection'
 import { MemorySection } from './components/MemorySection'
 import { PersonaSection } from './components/PersonaSection'
 import { PrivacySection } from './components/PrivacySection'
+import { StageNavBadge, StageSection } from './components/StageSection'
 import { TrustSection } from './components/TrustSection'
 import { SECTIONS, toSection, useSettingsUi, type SettingsSection } from './ui'
 
@@ -18,6 +19,7 @@ const NAV: Record<SettingsSection, { label: string; icon: LucideIcon }> = {
   integrations: { label: 'Integrations', icon: Plug },
   trust: { label: 'Trust ladder', icon: Lock },
   privacy: { label: 'Privacy', icon: ShieldCheck },
+  stage: { label: 'Stage', icon: Drama },
   audit: { label: 'Audit log', icon: ScrollText },
   memory: { label: 'Memory', icon: Brain },
 }
@@ -46,6 +48,8 @@ function NavBadge({ id }: { id: SettingsSection }): ReactNode {
       return guest || cam ? (
         <span className={cn(chip, 'bg-warn/20 text-warn')}>{[guest && 'guest', cam && 'cam'].filter(Boolean).join(' + ')}</span>
       ) : null
+    case 'stage':
+      return <StageNavBadge />
     case 'audit':
       return <span className="text-[11px] text-faint tabular-nums">{audit}</span>
     case 'memory':
@@ -62,6 +66,7 @@ function Body({ section }: { section: SettingsSection }) {
     case 'integrations': return <IntegrationsSection />
     case 'trust': return <TrustSection />
     case 'privacy': return <PrivacySection />
+    case 'stage': return <StageSection />
     case 'audit': return <AuditSection />
     case 'memory': return <MemorySection />
   }

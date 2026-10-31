@@ -1,5 +1,7 @@
-import { Camera, Check, Cloud, EyeOff, HardDrive, Lock, ShieldCheck, Users, X } from 'lucide-react'
-import { api } from '../../../api'
+import { Camera, Check, Cloud, EyeOff, HardDrive, Lock, ShieldCheck, SquareTerminal, Users, X } from 'lucide-react'
+import { useState } from 'react'
+import { api, useApiMode } from '../../../api'
+import { describeTerminalError, setTerminalsEnabled } from '../../../api/terminalClient'
 import { Badge, Panel, type Tone } from '../../../components/ui'
 import { useSnap } from '../../../state/store'
 import { Callout, SectionHeader, SettingRow } from './Atoms'
@@ -48,8 +50,45 @@ function Guards() {
   )
 }
 
+/**
+ * Embedded terminals (daemon mode only). The riskiest switch in the app: a terminal runs any command as the user.
+ * Off by default; turning it off ends every running terminal.
+ */
+function Terminals() {
+  const on = useSnap((d) => d.settings.terminals?.enabled === true)
+  const running = useSnap((d) => (d.terminals ?? []).filter((t) => t.state === 'running').length)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const change = (next: boolean): void => {
+    setBusy(true)
+    setError(null)
+    setTerminalsEnabled(next)
+      .catch((err: unknown) => setError(describeTerminalError(err)))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <Panel title="Embedded terminals" subtitle="Your own Claude Code and a shell, in the Work screen. Off by default" icon={SquareTerminal} area="work">
+      <SettingRow
+        className="py-0"
+        label={on ? `On: terminals can be opened${running > 0 ? ` (${running} running)` : ''}` : 'Off: nothing can open a terminal'}
+        hint="A terminal runs commands as you, on this PC, with your normal permissions: it can read, change and delete anything you can. The daemon only relays the bytes. They stay in memory so a reload can reattach, and are never written to disk, logged or shown to Mira. Mira (the chat assistant) has no tool that can open or read a terminal. Claude Code in a terminal is your own claude, which you sign in to yourself. Turning this off ends every running terminal."
+      >
+        <Switch checked={on} onChange={change} label="Embedded terminals" disabled={busy} />
+      </SettingRow>
+      {error && (
+        <p role="alert" className="mt-2 text-[12px] text-bad">
+          {error}
+        </p>
+      )}
+    </Panel>
+  )
+}
+
 /** PRIVACY: guest mode, webcam, and the full data-flow table with a plain summary of what leaves the PC. */
 export function PrivacySection() {
+  const daemon = useApiMode() === 'daemon'
   const flows = useSnap((d) => d.settings.privacy)
   const leaves = flows.filter((f) => f.leavesPc)
   const stays = flows.filter((f) => !f.leavesPc)
@@ -61,6 +100,7 @@ export function PrivacySection() {
       </SectionHeader>
 
       <Guards />
+      {daemon && <Terminals />}
 
       <Panel title="What leaves your PC" subtitle="A summary of the table below" icon={Cloud}>
         <div className="grid gap-3 @2xl:grid-cols-2">

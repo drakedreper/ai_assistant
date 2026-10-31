@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { Persona } from './schemas/settings'
 import { TaskColumn } from './schemas/work'
+import { Affect, GazeTarget, Posture, PresenceStyle, StageEngine, WardrobeSlot } from './stage'
 
 /**
  * The daemon's wire contract. The web DaemonClient and the daemon both import this, so they cannot drift.
@@ -35,6 +36,40 @@ export const DaemonRoutes = {
   terminalWs: (id: string) => `/ws/terminal/${encodeURIComponent(id)}`,
   /** WebSocket for a stage (Unreal/Unity/simulator). Authenticates with `Authorization: Bearer <stage token>`; loopback only. */
   stageWs: '/ws/stage',
+  /** GET: the StageSnapshot (also part of GET /api/snapshot). */
+  stage: '/api/stage',
+  /** PUT or POST {on}: the persisted stage switch (default on in daemon mode). */
+  stageEnabled: '/api/settings/stage',
+  /** DELETE: close the current stage connection (the stage may reconnect). */
+  stageConnection: '/api/stage/connection',
+  /** POST {manifest}: register a catalog entry (metadata only; the licence is judged on every use). */
+  stageAssets: '/api/stage/assets',
+  /** PUT {characterId}: make a character the active one of its role. */
+  stageCharacterSelect: '/api/stage/characters/select',
+  /** PUT {params}: morph sliders (refused when out of range or outside the adult envelope). */
+  stageCharacterParams: (id: string) => `/api/stage/characters/${encodeURIComponent(id)}/params`,
+  /** PUT: the presence style (five sliders and the baseline mood). */
+  stageCharacterPresence: (id: string) => `/api/stage/characters/${encodeURIComponent(id)}/presence`,
+  /** POST {assetId, slot?}: wear an item. */
+  stageEquip: (id: string) => `/api/stage/characters/${encodeURIComponent(id)}/equip`,
+  /** POST {slot}: take a slot off (refused when it would leave the character without a full outfit). */
+  stageUnequip: (id: string) => `/api/stage/characters/${encodeURIComponent(id)}/unequip`,
+  /** POST {presetId}: put on a saved outfit preset. */
+  stageOutfitApply: (id: string) => `/api/stage/characters/${encodeURIComponent(id)}/outfit/apply`,
+  /** POST {name}: save the current look as a preset. */
+  stageOutfitSave: (id: string) => `/api/stage/characters/${encodeURIComponent(id)}/outfit/save`,
+  /** POST {presetId}: delete a saved preset. */
+  stageOutfitDelete: (id: string) => `/api/stage/characters/${encodeURIComponent(id)}/outfit/delete`,
+  /** POST {activity?, weather?}: ask the OutfitDirector what she would wear (nothing is applied). */
+  stageOutfitSuggest: (id: string) => `/api/stage/characters/${encodeURIComponent(id)}/outfit/suggest`,
+  /** POST {presetId}: switch to a saved scene preset. */
+  stageScenePreset: '/api/stage/scene/preset',
+  /** POST {assetId,...}: place an object. */
+  stageSceneObjects: '/api/stage/scene/objects',
+  /** PUT or PATCH {...}: move or swap an object. DELETE: remove it. */
+  stageSceneObject: (id: string) => `/api/stage/scene/objects/${encodeURIComponent(id)}`,
+  /** PUT {shot}: the active camera shot. */
+  stageCamera: '/api/stage/scene/camera',
   /** WebSocket. Query: ?since=<seq>&epoch=<epoch> to resume. */
   ws: '/ws',
   /** Claude Code http hooks POST here. Bearer = hook token. Always answers 200 fast (fail-open). */
@@ -199,3 +234,109 @@ export const TerminalServerMessage = z.discriminatedUnion('type', [
   z.object({ type: z.literal('error'), message: z.string() }),
 ])
 export type TerminalServerMessage = z.infer<typeof TerminalServerMessage>
+
+// ---------------------------------------------------------------------------------------------------------------
+// Stage REST (apps/daemon/src/stage). All of these are validated again by the stage-core services.
+// ---------------------------------------------------------------------------------------------------------------
+
+const StageId = z.string().min(1).max(96)
+
+export const StageSelectRequest = z.object({ characterId: StageId })
+export type StageSelectRequest = z.infer<typeof StageSelectRequest>
+
+/** Morph sliders: paramId -> number, or "#rrggbb" for colours. Out-of-range values are REFUSED (never clamped silently). */
+export const StageParamsRequest = z.object({
+  params: z
+    .record(z.string().min(1).max(64), z.union([z.number(), z.string().max(16)]))
+    .refine((r) => Object.keys(r).length > 0 && Object.keys(r).length <= 64, { message: 'send between 1 and 64 parameters' }),
+  blendMs: z.number().min(0).max(5000).optional(),
+})
+export type StageParamsRequest = z.infer<typeof StageParamsRequest>
+
+/** Any subset of the presence style; `baseline` may carry any subset of valence, arousal, dominance. */
+export const StagePresenceRequest = PresenceStyle.partial()
+  .extend({ baseline: PresenceStyle.shape.baseline.partial().optional() })
+  .refine((v) => Object.keys(v).length > 0, { message: 'send at least one field' })
+export type StagePresenceRequest = z.infer<typeof StagePresenceRequest>
+
+export const StageEquipRequest = z.object({ assetId: StageId, slot: WardrobeSlot.optional() })
+export type StageEquipRequest = z.infer<typeof StageEquipRequest>
+
+export const StageUnequipRequest = z.object({ slot: WardrobeSlot })
+export type StageUnequipRequest = z.infer<typeof StageUnequipRequest>
+
+export const StageOutfitApplyRequest = z.object({ presetId: StageId })
+export type StageOutfitApplyRequest = z.infer<typeof StageOutfitApplyRequest>
+
+export const StageOutfitSaveRequest = z.object({ name: z.string().min(1).max(40), id: StageId.optional() })
+export type StageOutfitSaveRequest = z.infer<typeof StageOutfitSaveRequest>
+
+export const StageOutfitSuggestRequest = z.object({
+  activity: z.enum(['work', 'meeting', 'relax', 'sleep', 'out']).optional(),
+  weather: z.enum(['clear', 'cloudy', 'rain', 'snow', 'cold', 'hot']).optional(),
+})
+export type StageOutfitSuggestRequest = z.infer<typeof StageOutfitSuggestRequest>
+
+export const StageScenePresetRequest = z.object({ presetId: StageId })
+export type StageScenePresetRequest = z.infer<typeof StageScenePresetRequest>
+
+const Metres = z.number().min(-50).max(50)
+export const StageSceneObjectAddRequest = z.object({
+  assetId: StageId,
+  id: StageId.optional(),
+  /** Metres, Y up. Omitted: a free spot is chosen. */
+  position: z.tuple([Metres, Metres, Metres]).optional(),
+  yawDeg: z.number().min(-360).max(360).optional(),
+  scale: z.number().min(0.05).max(20).optional(),
+  role: z.enum(['static', 'furniture', 'interactable']).optional(),
+})
+export type StageSceneObjectAddRequest = z.infer<typeof StageSceneObjectAddRequest>
+
+export const StageSceneObjectUpdateRequest = z
+  .object({
+    assetId: StageId.optional(),
+    position: z.tuple([Metres, Metres, Metres]).optional(),
+    yawDeg: z.number().min(-360).max(360).optional(),
+    scale: z.number().min(0.05).max(20).optional(),
+    visible: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'send at least one field' })
+export type StageSceneObjectUpdateRequest = z.infer<typeof StageSceneObjectUpdateRequest>
+
+export const StageCameraRequest = z.object({ shot: z.string().min(1).max(32) })
+export type StageCameraRequest = z.infer<typeof StageCameraRequest>
+
+/** A catalog manifest (asset.json). Metadata only: no binary is ever accepted here. Judged by the stage-core catalog. */
+export const StageAssetRegisterRequest = z.object({ manifest: z.record(z.string(), z.unknown()) })
+export type StageAssetRegisterRequest = z.infer<typeof StageAssetRegisterRequest>
+
+/**
+ * The light, live part of the stage state, pushed to the dashboards (`stage.live` event) and included in the stage
+ * snapshot. `rev` changes whenever the structural snapshot (characters, wardrobe, scene, connection) changed: refetch
+ * GET /api/stage then. The rest is what the draft web stage draws without fetching anything.
+ */
+export const StageLive = z.object({
+  rev: z.number().int().nonnegative(),
+  enabled: z.boolean(),
+  connected: z.boolean(),
+  engine: StageEngine.optional(),
+  mood: Affect.nullable(),
+  idle: z.enum(['attentive', 'relaxed', 'busy', 'sleepy', 'asleep']).optional(),
+  posture: Posture.optional(),
+  gaze: GazeTarget.optional(),
+  speaking: z.boolean(),
+  camera: z.string().optional(),
+  /** Last stage performance report (fps), if the connected stage sends one. */
+  perf: z.object({ fps: z.number(), gpuMs: z.number(), vramMb: z.number() }).optional(),
+})
+export type StageLive = z.infer<typeof StageLive>
+
+/** What the OutfitDirector would do now, with its one-line reason. Nothing is applied by asking. */
+export const StageOutfitSuggestion = z.object({
+  presetId: z.string(),
+  presetName: z.string(),
+  explanation: z.string(),
+  /** False when the suggestion is "keep what she wears". */
+  changed: z.boolean(),
+})
+export type StageOutfitSuggestion = z.infer<typeof StageOutfitSuggestion>

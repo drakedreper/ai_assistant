@@ -172,6 +172,95 @@ export const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    version: 3,
+    name: 'stage: assets, characters, wardrobe presets, scenes, memory, mood',
+    up(db) {
+      db.exec(`
+        -- The asset catalog: METADATA ONLY (no binary is ever stored here). The licence is copied into columns so it
+        -- can be listed and audited without parsing JSON; the manifest JSON is what the stage-core catalog loads.
+        CREATE TABLE stage_assets (
+          id                TEXT PRIMARY KEY,
+          kind              TEXT NOT NULL,
+          name              TEXT NOT NULL,
+          source            TEXT NOT NULL,
+          license_id        TEXT NOT NULL,
+          personal_use      INTEGER NOT NULL,
+          commercial_use    INTEGER NOT NULL,
+          redistribution    INTEGER NOT NULL,
+          adult_expression  INTEGER,
+          manifest_json     TEXT NOT NULL,
+          added_at          TEXT NOT NULL
+        );
+        CREATE INDEX stage_assets_kind ON stage_assets(kind);
+
+        CREATE TABLE stage_characters (
+          id             TEXT PRIMARY KEY,
+          ord            INTEGER NOT NULL,
+          role           TEXT NOT NULL,
+          name           TEXT NOT NULL,
+          base_asset_id  TEXT NOT NULL,
+          profile_json   TEXT NOT NULL,
+          created_at     TEXT NOT NULL,
+          updated_at     TEXT NOT NULL
+        );
+
+        -- Wardrobe presets of a character (the profile JSON above carries none: this table is their home).
+        CREATE TABLE stage_outfit_presets (
+          character_id  TEXT NOT NULL REFERENCES stage_characters(id) ON DELETE CASCADE,
+          ord           INTEGER NOT NULL,
+          id            TEXT NOT NULL,
+          name          TEXT NOT NULL,
+          preset_json   TEXT NOT NULL,
+          PRIMARY KEY (character_id, id)
+        );
+
+        -- Which character of each role is the active one.
+        CREATE TABLE stage_active (
+          role          TEXT PRIMARY KEY,
+          character_id  TEXT NOT NULL REFERENCES stage_characters(id) ON DELETE CASCADE
+        );
+
+        -- The working scene (exactly one row) and the saved scene presets.
+        CREATE TABLE stage_scene (
+          id          INTEGER PRIMARY KEY CHECK (id = 1),
+          scene_json  TEXT NOT NULL,
+          updated_at  TEXT NOT NULL
+        );
+        CREATE TABLE stage_scene_presets (
+          id          TEXT PRIMARY KEY,
+          name        TEXT NOT NULL,
+          scene_json  TEXT NOT NULL,
+          updated_at  TEXT NOT NULL
+        );
+
+        -- What she remembers about the two of them (episodes, relationship facts, preferences).
+        CREATE TABLE stage_memory (
+          id               TEXT PRIMARY KEY,
+          kind             TEXT NOT NULL,
+          text             TEXT NOT NULL,
+          importance       INTEGER NOT NULL,
+          emotion          TEXT,
+          sensitivity      TEXT NOT NULL,
+          tags_json        TEXT NOT NULL DEFAULT '[]',
+          created_at       INTEGER NOT NULL,
+          updated_at       INTEGER NOT NULL,
+          recall_count     INTEGER NOT NULL DEFAULT 0,
+          last_recalled_at INTEGER
+        );
+        CREATE INDEX stage_memory_kind ON stage_memory(kind, created_at);
+
+        -- Her mood (exactly one row), restored on start and decayed from the time it was written.
+        CREATE TABLE stage_mood (
+          id         INTEGER PRIMARY KEY CHECK (id = 1),
+          valence    REAL NOT NULL,
+          arousal    REAL NOT NULL,
+          dominance  REAL NOT NULL,
+          at         INTEGER NOT NULL
+        );
+      `)
+    },
+  },
 ]
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0

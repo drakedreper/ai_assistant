@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+import { Suspense, lazy, useEffect, useState, type ComponentType } from 'react'
+import { useApiMode } from '../../api'
 import { Badge, Segmented } from '../../components/ui'
 import { pendingApprovals, useSnap, useStore } from '../../state/store'
 import { ApprovalsTab } from './components/ApprovalsTab'
@@ -9,6 +10,17 @@ import { Overview } from './components/Overview'
 import { StatStrip } from './components/StatStrip'
 import { Toasts } from './components/Toasts'
 import { useWork, type WorkTab } from './ui'
+
+// The terminal view (and xterm.js with it) is a separate chunk, fetched the first time the tab opens. The single-file
+// mockup build is never served by a daemon, so there it is compiled out and the mockup stays small.
+const TerminalTab = lazy(
+  (): Promise<{ default: ComponentType }> =>
+    import.meta.env.MODE === 'single'
+      ? Promise.resolve({ default: () => null })
+      : import('./components/TerminalTab').then((m) => ({ default: m.TerminalTab })),
+)
+/** The Terminal tab is local UI state: it is not part of the deep-link vocabulary of the other tabs. */
+let terminalTabOpen = false
 
 const TABS: WorkTab[] = ['overview', 'board', 'cost', 'approvals']
 const isTab = (v: string | undefined): v is WorkTab => !!v && (TABS as string[]).includes(v)
@@ -23,6 +35,12 @@ export function WorkView() {
   const params = useStore((s) => s.viewParams)
   const clearParams = useStore((s) => s.clearParams)
   const pending = useSnap((d) => pendingApprovals(d).filter((a) => a.area === 'work').length)
+  const daemon = useApiMode() === 'daemon'
+  const [terminal, setTerminalState] = useState(terminalTabOpen && daemon)
+  const setTerminal = (v: boolean) => {
+    terminalTabOpen = v
+    setTerminalState(v)
+  }
 
   // Deep links from other screens: apply once, then clear.
   useEffect(() => {
@@ -41,7 +59,10 @@ export function WorkView() {
       ui.flash({ approval: params.approval })
     }
     const next = isTab(params.tab) ? params.tab : params.approval ? 'approvals' : params.task ? 'board' : params.session ? 'overview' : undefined
-    if (next) setTab(next)
+    if (next) {
+      setTab(next)
+      setTerminal(false)
+    }
     if (params.session) {
       const id = params.session
       setTimeout(() => document.querySelector(`[data-session-id="${id}"]`)?.scrollIntoView({ block: 'nearest' }), 80)
@@ -58,8 +79,12 @@ export function WorkView() {
         </div>
         <Segmented
           ariaLabel="Work sections"
-          value={tab}
-          onChange={setTab}
+          value={terminal && daemon ? 'terminal' : tab}
+          onChange={(v) => {
+            if (v === 'terminal') return setTerminal(true)
+            setTerminal(false)
+            setTab(v)
+          }}
           options={[
             { value: 'overview', label: 'Overview' },
             { value: 'board', label: 'Board' },
@@ -73,18 +98,27 @@ export function WorkView() {
                 </span>
               ),
             },
+            ...(daemon ? [{ value: 'terminal' as const, label: 'Terminal', title: 'Your own Claude Code and a shell, running on this PC' }] : []),
           ]}
         />
         <MonitorHealth />
       </header>
 
-      <StatStrip />
+      {!(terminal && daemon) && <StatStrip />}
 
-      <div role="tabpanel" aria-label={`${tab} panel`}>
-        {tab === 'overview' && <Overview />}
-        {tab === 'board' && <Board />}
-        {tab === 'cost' && <CostTab />}
-        {tab === 'approvals' && <ApprovalsTab />}
+      <div role="tabpanel" aria-label={`${terminal && daemon ? 'terminal' : tab} panel`}>
+        {terminal && daemon ? (
+          <Suspense fallback={<p className="px-1 text-[12px] text-faint">Loading the terminal view...</p>}>
+            <TerminalTab />
+          </Suspense>
+        ) : (
+          <>
+            {tab === 'overview' && <Overview />}
+            {tab === 'board' && <Board />}
+            {tab === 'cost' && <CostTab />}
+            {tab === 'approvals' && <ApprovalsTab />}
+          </>
+        )}
       </div>
       <Toasts />
     </div>

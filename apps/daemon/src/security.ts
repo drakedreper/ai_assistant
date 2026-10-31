@@ -7,6 +7,9 @@ import { z } from 'zod'
  * Per-install secrets and the request-level checks that every route and the WebSocket upgrade share.
  *
  *  - hook token: random 256-bit bearer token for Claude Code http hooks. Separate from browser auth.
+ *  - stage token: random 256-bit bearer token for the stage socket (Unreal, Unity, the simulator). Separate from
+ *    browser auth AND from the hook token: the browser cookie does nothing on the stage socket and the stage token
+ *    does nothing on any browser route. It is never printed (the banner only says where to find it).
  *  - exchange code: single use, short lived, printed once at startup; swapped at POST /api/auth/exchange for
  *    an opaque session cookie (HttpOnly, SameSite=Strict). Only a SHA-256 of each session token is stored.
  *
@@ -30,6 +33,8 @@ const StoredSession = z.object({ hash: z.string().length(64), createdAt: z.numbe
 const SecretsFile = z.object({
   version: z.literal(1),
   hookToken: z.string().min(32),
+  /** Optional in the schema so a Phase 1 file still loads; createSecurity adds one on the first start that needs it. */
+  stageToken: z.string().min(32).optional(),
   sessions: z.array(StoredSession).default([]),
 })
 export type SecretsFile = z.infer<typeof SecretsFile>
@@ -68,6 +73,15 @@ export function rotateSecretsHookToken(dataDir: string): string | null {
   return hookToken
 }
 
+/** Replace only the stage token in an existing secrets file (`stage token --rotate`). Returns the new token, or null if there is no file. */
+export function rotateSecretsStageToken(dataDir: string): string | null {
+  const existing = readSecretsFile(dataDir)
+  if (!existing) return null
+  const stageToken = newToken(32)
+  writeSecretsFile(dataDir, { ...existing, stageToken })
+  return stageToken
+}
+
 /** Load the secrets, creating the file (and a fresh hook token) on first run. A corrupt file is set aside, not trusted. */
 export function loadOrCreateSecrets(dataDir: string): SecretsFile {
   const existing = readSecretsFile(dataDir)
@@ -79,7 +93,7 @@ export function loadOrCreateSecrets(dataDir: string): SecretsFile {
   } catch {
     /* no file: first run */
   }
-  const fresh: SecretsFile = { version: 1, hookToken: newToken(32), sessions: [] }
+  const fresh: SecretsFile = { version: 1, hookToken: newToken(32), stageToken: newToken(32), sessions: [] }
   writeSecretsFile(dataDir, fresh)
   return fresh
 }
@@ -115,6 +129,11 @@ export interface Security {
   hookToken(): string
   /** Rewrite the hook token (the installed hooks must be updated afterwards). */
   rotateHookToken(): string
+  /** The bearer token of the stage socket. Never log it, never put it in a URL. */
+  stageToken(): string
+  /** Rewrite the stage token; a connected stage keeps its socket, a reconnect needs the new one. */
+  rotateStageToken(): string
+  verifyStageToken(authorization: string | undefined): boolean
   issueExchangeCode(): { code: string; expiresAt: number }
   exchange(code: string): ExchangeResult
   setCookieHeader(token: string, maxAgeSec: number): string
@@ -129,6 +148,11 @@ export interface Security {
   checkSessionCookie(cookieHeader: string | undefined): Verdict
   /** Host, Origin and cookie checks for a WebSocket upgrade, in that order. */
   checkUpgrade(h: { host?: string; origin?: string; cookie?: string }): Verdict
+  /**
+   * The stage socket upgrade: Host, then Origin (ABSENT is fine, a stage is not a browser; if present it must be
+   * allowlisted), then the bearer stage token. The cookie header is never read.
+   */
+  checkStageUpgrade(h: { host?: string; origin?: string; authorization?: string }): Verdict
   csp(): string
 }
 
@@ -161,15 +185,18 @@ export function createSecurity(opts: SecurityOptions): Security {
     secretsMtime = mtimeOf(opts.dataDir)
   }
 
-  /** Pick up a hook token rotated by the CLI while the daemon is running (one stat per hook request). */
+  /** Pick up a hook or stage token rotated by a CLI while the daemon is running (one stat per hook or stage request). */
   function refreshHookToken(): void {
     if (!persist) return
     const m = mtimeOf(opts.dataDir)
     if (m === secretsMtime) return
     secretsMtime = m
     const fresh = readSecretsFile(opts.dataDir)
-    if (fresh) secrets = { ...secrets, hookToken: fresh.hookToken }
+    if (fresh) secrets = { ...secrets, hookToken: fresh.hookToken, ...(fresh.stageToken ? { stageToken: fresh.stageToken } : {}) }
   }
+
+  /** The stage token always exists once the security core is built (see below). */
+  const currentStageToken = (): string => secrets.stageToken ?? ''
 
   function pruneSessions(): void {
     const t = now()
@@ -264,6 +291,25 @@ export function createSecurity(opts: SecurityOptions): Security {
       save()
     },
 
+    stageToken() {
+      refreshHookToken()
+      return currentStageToken()
+    },
+    rotateStageToken() {
+      secrets = { ...secrets, stageToken: newToken(32) }
+      save()
+      return currentStageToken()
+    },
+    verifyStageToken(authorization) {
+      refreshHookToken()
+      const m = /^Bearer\s+(\S+)$/i.exec(authorization ?? '')
+      const presented = m?.[1] ?? ''
+      const expected = currentStageToken()
+      // Compare even when nothing was presented, so timing says nothing; an empty expectation never matches.
+      const same = safeEqual(presented, expected)
+      return same && presented.length > 0 && expected.length > 0
+    },
+
     verifyHookToken(authorization) {
       refreshHookToken()
       const m = /^Bearer\s+(\S+)$/i.exec(authorization ?? '')
@@ -294,6 +340,14 @@ export function createSecurity(opts: SecurityOptions): Security {
       return security.checkSessionCookie(h.cookie)
     },
 
+    checkStageUpgrade(h) {
+      const host = security.checkHost(h.host)
+      if (!host.ok) return host
+      const origin = security.checkOrigin(h.origin, false)
+      if (!origin.ok) return origin
+      return security.verifyStageToken(h.authorization) ? ok : deny(401, 'unauthorized', 'A valid stage token is required (Authorization: Bearer <stage token>)')
+    },
+
     csp() {
       const p = port
       return [
@@ -314,5 +368,10 @@ export function createSecurity(opts: SecurityOptions): Security {
   }
 
   pruneSessions()
+  // A secrets file written before the stage existed has no stage token: add one (the first start after the upgrade).
+  if (!secrets.stageToken) {
+    secrets = { ...secrets, stageToken: newToken(32) }
+    save()
+  }
   return security
 }

@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { AvatarEvent, Briefing, ChatMessage, LearnedFact } from './assistant'
 import { BrainLayer, MemoryEntry, Note, Proposal } from './brain'
-import { TerminalInfo } from '../daemon'
+import { StageLive, TerminalInfo } from '../daemon'
 import { StageSnapshot } from '../stage'
 import { Id, IsoDateTime } from './common'
 import { CalendarEvent, Contact, MailThread } from './life'
@@ -85,6 +85,8 @@ export const ServerEvent = z.discriminatedUnion('type', [
   z.object({ ...base, type: z.literal('proposal.update'), proposal: Proposal }),
   z.object({ ...base, type: z.literal('settings.update'), settings: SettingsSnapshot }),
   z.object({ ...base, type: z.literal('learned.update'), learned: z.array(LearnedFact) }),
+  /** Live state of the stage backend (mood, posture, gaze, connection). `live.rev` changes when GET /api/stage should be refetched. */
+  z.object({ ...base, type: z.literal('stage.live'), live: StageLive }),
   /** The client refetched the snapshot (reconnect after sleep, daemon restart, sequence gap). Replace everything. */
   z.object({ ...base, type: z.literal('snapshot.reset'), snapshot: Snapshot }),
 ])

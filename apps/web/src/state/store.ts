@@ -8,7 +8,8 @@ import type {
   Snapshot,
 } from '@ai-assistant/shared'
 import { create } from 'zustand'
-import { api, apiReady } from '../api'
+import { api, apiMode, apiReady } from '../api'
+import { startStageFeed } from '../stage/feed'
 import type { View } from '../lib/areas'
 
 export type RoomMode = 'mini' | 'quarter' | 'half' | 'full'
@@ -126,6 +127,8 @@ export const useStore = create<AppState>((set, get) => ({
     })
     api.subscribe((e) => get().applyEvent(e))
     api.onConnection?.((connection) => set({ connection }))
+    // The stage backend's live feed (daemon mode only): the Stage tab's state and the draft Room's mood, gaze and sleep.
+    if (apiMode() === 'daemon') startStageFeed({ initial: () => get().data?.stage, applyRoom: (patch) => set(patch) })
     // Keep "now" (and everything relative to it) fresh.
     setInterval(() => set({ now: new Date() }), 30_000)
   })()),

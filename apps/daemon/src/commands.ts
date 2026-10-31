@@ -25,6 +25,9 @@ const TRUST_RULE_BY_KIND: Record<string, string | undefined> = {
  * publishes the matching ServerEvent. Semantics follow apps/web/src/api/fixtureClient.ts.
  */
 export class Commands {
+  /** Set by the composition root: the stage stops talking when the user interrupts (barge-in). */
+  onInterrupt: (() => void) | undefined
+
   constructor(private readonly ctx: DaemonContext) {}
 
   // ---------------------------------------------------------------- helpers
@@ -101,6 +104,11 @@ export class Commands {
   }
 
   async interruptChat(): Promise<void> {
+    try {
+      this.onInterrupt?.()
+    } catch {
+      /* the stage must never get in the way of an interrupt */
+    }
     try {
       await this.ctx.lane.interrupt()
     } catch (err) {

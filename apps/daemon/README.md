@@ -5,7 +5,9 @@ The local daemon of the assistant (Phase 1). One Node process on `127.0.0.1` tha
 - serves the web app (`apps/web/dist`) and a REST + WebSocket API that implements the `ApiClient` contract of `packages/shared`;
 - hosts the **Secretary lane** (`@ai-assistant/agent-core`): chat with Claude through the Agent SDK, tool permissions as approval cards, spend budgets;
 - receives **Claude Code http hooks** and projects them into a live monitor of terminal and IDE sessions (the Work screen);
-- keeps operations state in SQLite (sessions, events, tasks, approvals, chat, audit, usage) and settings in a small key-value table.
+- hosts **embedded terminals** (your own `claude` and a shell on a PTY, off until you switch them on; the highest-risk surface, see [Terminal](#terminal));
+- hosts the **stage backend** (the live 3D assistant: the character, her wardrobe and mood, the scene she lives in, a speech pipeline, and the `mira-stage/1` socket that any renderer connects to; on by default, see [Stage](#stage));
+- keeps operations state in SQLite (sessions, events, tasks, approvals, chat, audit, usage, and the stage) and settings in a small key-value table.
 
 Everything else (brain, calendar, mail, finance, world, briefing) is still fixture data behind the same snapshot, see [What is real and what is mock](#what-is-real-and-what-is-mock).
 
@@ -32,7 +34,7 @@ Mira daemon 0.0.0
 
 Open the link in the browser you will use (use the same host name, `127.0.0.1` or `localhost`, afterwards: cookies are per host). The web app must read `?code=`, `POST /api/auth/exchange` it, then remove it from the URL (`history.replaceState`) so it does not stay in the history. Restart the daemon for a new link; the browser session itself lasts 30 days and survives restarts.
 
-`Ctrl+C` (SIGINT, SIGTERM, and SIGBREAK on Windows) shuts down gracefully: interrupt and stop the lane, stop the timers, close the WebSocket clients (code 1001), drain pending hook events, close the database. A second signal forces exit.
+`Ctrl+C` (SIGINT, SIGTERM, and SIGBREAK on Windows) shuts down gracefully: interrupt and stop the lane, stop the timers, kill every embedded terminal and its process tree, close the WebSocket clients (code 1001), drain pending hook events, close the database. A second signal forces exit.
 
 ### Environment
 
@@ -45,7 +47,7 @@ All read once at startup by `src/config.ts` (a pure function of the environment,
 | `CLAUDE_BACKEND` | `fake` | `fake` (scripted, zero tokens) or `sdk` (real Agent SDK). |
 | `CLAUDE_AUTH_MODE` | `api-key` | `api-key` or `local-login` ([ADR 0001](../../docs/adr/0001-claude-auth-modes.md)). Changeable in Settings; takes effect for the next lane session (restart). |
 | `ANTHROPIC_API_KEY` | none | Read only in `config.ts`, kept non-enumerable (never in JSON or logs), passed to the SDK backend in `api-key` mode. |
-| `CLAUDE_EXECUTABLE` | SDK-bundled binary | Path to your own `claude` for `local-login`. The daemon never reads or proxies OAuth tokens. |
+| `CLAUDE_EXECUTABLE` | SDK-bundled binary | Path to your own `claude` for `local-login`. The daemon never reads or proxies OAuth tokens. Also the program the embedded "Claude" terminals run (else a PATH search). |
 | `DEMO` | off | `1` keeps the fixture sessions, tasks, approvals and events so the Work screen is populated. Runs on a separate, disposable `demo.db` that is recreated at every start. |
 | `WEB_DIST` | `apps/web/dist` | Static files to serve (used only if `index.html` exists there). |
 | `DEV_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | Extra allowed `Origin`s (the Vite dev server). |
@@ -55,6 +57,13 @@ All read once at startup by `src/config.ts` (a pure function of the environment,
 | `STALE_IDLE_MINUTES` | `360` | Same for `idle`, `waiting_input` and `blocked_permission` sessions. |
 | `RETENTION_DAYS` | `30` | Finished hook sessions and raw events older than this are deleted. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Used only by the hook installer CLI. |
+| `TERMINAL_MAX` | `4` | Running embedded terminals at once (1 to 16). |
+| `TERMINAL_IDLE_MINUTES` | `240` | A running terminal with **no client attached** is closed after this long (1 to 10080). An attached terminal is never idle-closed. |
+| `TERMINAL_SCROLLBACK_KB` | `256` | Per-terminal output ring buffer replayed on attach (16 to 4096). Memory only. |
+| `TERMINAL_ALLOW_DEV_ORIGINS` | off | `1` lets the Vite dev server's origin (`DEV_ORIGINS`) use terminals. Off by default, see [Terminal](#terminal): developing the terminal UI against `pnpm dev` needs it. |
+| `TERMINAL_CLAUDE_COMMAND` | none | **Test only.** A program (or a JSON array `["node","script.js"]`) that "Claude" terminals run instead of your `claude`. The daemon logs a warning when it is set. |
+
+There is no environment variable that turns embedded terminals on: only the switch in Settings does (see [Terminal](#terminal)).
 
 ### Developing the web app against the daemon
 
@@ -70,7 +79,7 @@ server: {
 },
 ```
 
-`changeOrigin: true` is required: the daemon rejects any `Host` other than `127.0.0.1:PORT` or `localhost:PORT`. The `Origin` the browser sends (`http://127.0.0.1:5173`) is in the dev allowlist.
+`changeOrigin: true` is required: the daemon rejects any `Host` other than `127.0.0.1:PORT` or `localhost:PORT`. The `Origin` the browser sends (`http://127.0.0.1:5173`) is in the dev allowlist. Embedded terminals are the exception: they accept only the daemon's own origin, so using them through the dev server needs `TERMINAL_ALLOW_DEV_ORIGINS=1` on the daemon (see [Terminal](#terminal)).
 
 ## Security model
 
@@ -104,7 +113,7 @@ Not covered: other software running as the same Windows user can read `secrets.j
 
 ## API
 
-All routes except `/api/auth/exchange`, static files and `/hooks/*` need the session cookie. Errors are `{ "error": "<code>", "message": "...", "details"?: [...] }`. Request bodies are validated with the zod schemas in `packages/shared/src/daemon.ts` (`400 invalid_request` / `invalid_json`, `413` above 512 KB).
+All routes except `/api/auth/exchange`, static files and `/hooks/*` need the session cookie. Errors are `{ "error": "<code>", "message": "...", "details"?: [...] }`. Request bodies are validated with the zod schemas in `packages/shared/src/daemon.ts` (`400 invalid_request` / `invalid_json`, `413` above 512 KB; a body without a declared `Content-Length`, for example a chunked upload, is read under the same cap, and a bodiless `DELETE` passes).
 
 | Route | Purpose |
 |---|---|
@@ -119,11 +128,15 @@ All routes except `/api/auth/exchange`, static files and `/hooks/*` need the ses
 | `PUT /api/settings/trust/:ruleId` | `{mode: ask \| auto}`. `409 locked` for locked rules (money, strategy, persona). |
 | `PUT /api/settings/claude-mode`, `/guest`, `/webcam`, `/persona` | Persisted in `kv`. POST is accepted as an alias for PUT. Persona edits apply immediately and are audited (the lock on "change her own persona" is about Mira editing herself). |
 | `DELETE /api/learned/:id` | Forget a learned fact (persisted). |
+| `GET/POST /api/terminals`, `GET/DELETE /api/terminals/:id`, `POST /api/terminals/:id/ticket`, `GET /ws/terminal/:id` | Embedded terminals. **403 `terminals_disabled` until switched on.** See [Terminal](#terminal). |
+| `PUT or POST /api/settings/terminals` | `{on}`: the switch. Persisted, audited, `settings.terminals.enabled` in the snapshot; switching off kills every running terminal. |
+| `GET /api/stage`, `PUT or POST /api/settings/stage`, `DELETE /api/stage/connection`, `POST /api/stage/assets`, `PUT /api/stage/characters/select`, `PUT .../:id/params`, `PUT .../:id/presence`, `POST .../:id/equip`, `.../unequip`, `.../outfit/apply`, `.../outfit/save`, `.../outfit/delete`, `.../outfit/suggest`, `POST /api/stage/scene/preset`, `POST /api/stage/scene/objects`, `PUT or PATCH` and `DELETE /api/stage/scene/objects/:id`, `PUT /api/stage/scene/camera` | The stage backend, see [Stage](#stage). Cookie auth like every browser route. |
 | `GET /ws` | WebSocket, see below. |
+| `GET /ws/stage` | The stage socket for an engine or the simulator: **bearer stage token, never the cookie**. See [Stage](#stage). |
 | `POST /hooks/:event` | Claude Code hooks. Bearer hook token only. Always answers `200 {}` first, processes afterwards. |
 | `GET *` | Static files from `apps/web/dist` with SPA fallback (HTML navigations only) and the CSP. Without a build, `/` shows a placeholder page. |
 
-Every mutation writes an audit entry and publishes the matching `ServerEvent` (`chat.*`, `avatar`, `session.update`, `agent.event`, `approval.new/resolved`, `task.update`, `proposal.update`, `settings.update`, `learned.update`, `snapshot.reset`).
+Every mutation writes an audit entry and publishes the matching `ServerEvent` (`chat.*`, `avatar`, `session.update`, `agent.event`, `approval.new/resolved`, `task.update`, `proposal.update`, `settings.update`, `learned.update`, `snapshot.reset`, and `stage.live` for the stage backend).
 
 ### WebSocket
 
@@ -144,6 +157,160 @@ The first message is the shared `WsHello` plus a local flag: `{type:"hello", seq
 
 On `resync:true` the client refetches `GET /api/snapshot`, replaces its state, and ignores live events with `seq <= snapshot.seq`. Flow for a normal connect: `GET /api/snapshot` (take `seq` and the `X-Daemon-Epoch` header), then open `/ws?since=<seq>&epoch=<epoch>`; nothing published in between is lost.
 
+## Terminal
+
+The user can run their own `claude` and a shell **inside the app**. Under the hood the daemon starts the program on a PTY (node-pty: ConPTY on Windows, forkpty elsewhere) and relays its bytes to xterm.js in the Work screen (Work, Terminal). Code: `src/terminal/`, tests: `test/terminal*.test.ts`, browser side: `apps/web/src/api/terminalClient.ts` and `apps/web/src/views/work/components/TerminalTab.tsx`.
+
+### Threat model: this is remote code execution as the user, by design
+
+A terminal runs any command with the user's full permissions. Whoever can drive one owns the PC and the user's files, accounts and tokens. So the design assumes the following attackers and keeps the surface as small as it can be:
+
+| Attacker | What they would try | Mitigation |
+|---|---|---|
+| A web page in the user's browser | Open a terminal with a cross-site request; hijack the socket (cross-site WebSocket hijacking); DNS rebinding | `Host`, `Origin` (required on every mutation and on the upgrade), `SameSite=Strict` HttpOnly cookie, JSON content type, no CORS. A socket needs a ticket on top of the cookie. |
+| Another local program that can reach `127.0.0.1` but has no cookie | Connect to the socket | No cookie, no ticket: refused (401 on the upgrade). |
+| The assistant itself (a prompt injection, a bad tool call) | Make Mira open or type into a terminal | **No tool exists for it.** Terminals are not in `TOOL_SURFACE` or `STAGE_TOOL_SURFACE`, the lane context carries no reference to them, and `test/terminal.lanes.test.ts` checks the surfaces, the lane context, the imports of the lane and tool wiring files and that driving the real Secretary lane never spawns a process. |
+| A program running inside a terminal | Read the daemon's secrets from its environment | The child environment is the user's minus everything that belongs to the daemon (below). |
+| A bug that lets a client flood or stall the daemon | Memory or CPU exhaustion | Caps on terminals, frame size, input rate, scrollback, unauthenticated sockets and send buffers. |
+| Someone who finds a terminal left open | Reattach later | Switching terminals off kills them all; detached terminals are closed after the idle timeout; the cookie and a fresh ticket are needed to attach. |
+
+Not covered: malware already running as the same Windows user (it can start any process itself and read `secrets.json`); a compromised web app bundle (XSS) would be able to type into a terminal, which is why the CSP forbids inline and foreign scripts; the user pasting a hostile command into their own shell.
+
+### Mitigations, in the order a request meets them
+
+1. **Off by default.** Every terminal route, including the socket upgrade, answers `403 terminals_disabled` until the user turns on Settings, Privacy, "Embedded terminals" (`PUT /api/settings/terminals {on}`). The switch is stored in `kv` (`settings.terminals`), written to the audit log and shown in `settings.terminals.enabled`. **Switching off kills every running terminal and its process tree, empties the list and drops pending tickets before the call returns.** Authentication is checked before the gate, so an unauthenticated caller learns nothing about the switch.
+2. **The ordinary request gate** (`src/http/guards.ts`) on every route: Host, Origin, JSON content type, session cookie. A plain HTTP `GET /ws/terminal/:id` also needs the cookie (`426` otherwise).
+   **Own origin only.** On top of the allowlist, terminal routes, the on/off switch and the socket accept only the daemon's own origin (`http://127.0.0.1:PORT`, `http://localhost:PORT`). The session cookie is shared by every port on `127.0.0.1`, and `DEV_ORIGINS` allows `:5173` (everyone's Vite default), so without this rule any other app that happens to run on that port could mint tickets or switch terminals on. The dev server needs `TERMINAL_ALLOW_DEV_ORIGINS=1` to use them. (The rest of the API keeps the general allowlist, so the same exposure exists there for everything else; terminals are the one surface where it is remote code execution.)
+3. **Tickets** (`src/terminal/tickets.ts`). A browser cannot set headers on a WebSocket and a secret in a URL would reach history and logs, so: `POST /api/terminals/:id/ticket` (cookie, Origin, JSON, like every mutation) returns `{ticket, expiresInSec: 30}`. A ticket is 256 random bits (only its SHA-256 is kept), **single use** (presenting it consumes it, whatever the outcome), valid for about 30 seconds, **bound to that one terminal** and **to the browser session that asked** (SHA-256 of the cookie). Every pending ticket is compared with `timingSafeEqual`, no early exit. More than 20 failed presentations in a minute are refused outright. Nothing is ever read from the socket URL's query string.
+4. **The socket** (`src/terminal/ws.ts`). Upgrade checks: Host, Origin (required), cookie, switch on, terminal exists, at most 8 unauthenticated sockets. After the upgrade the **first frame must be a text frame `{type:"auth", ticket}` within 5 seconds**; anything else, a bad, reused, expired or foreign ticket, closes the socket with the generic reason `unauthorized` (code 4401; timeout 4408). Then `{type:"ready", replayBytes}`, the scrollback as **binary** frames, then live output. Keystrokes and output are binary frames; text frames are only the shared `TerminalClientMessage` (resize) and `TerminalServerMessage` (ready, exit, error), validated with the zod schemas in `packages/shared/src/daemon.ts`; a malformed text frame closes the socket (4400).
+5. **Limits.** `TERMINAL_MAX` running terminals (429 `terminal_limit`; slots are reserved while a process is starting, so concurrent creates cannot pass the cap). **One attached client per terminal**: a second attach is refused with `already_attached` (close code 4409). Input frames above 64 KB close the socket (1009); a token bucket on keystrokes (1 MiB burst, 512 KiB/s sustained, every frame costs at least 256 bytes so a flood of tiny frames is limited too) drops excess frames **with an `input_rate_limited` error, never silently**. Output to a client whose unsent buffer passes 1 MiB is dropped (the client is disconnected, the terminal keeps running, it can reattach and gets the replay). Scrollback: a fixed ring buffer (default 256 KB) allocated once per terminal, **in memory only, never written to disk or logged**. Ping every 30 s drops dead peers. At most 8 exited terminals stay listed.
+6. **Where a terminal starts** (`src/terminal/cwd.ts`). `projectId` resolves to that project's `rootPath` (from the hook-discovered projects; the Secretary lane's pseudo project is not one). An explicit `cwd` must be an absolute path that, after `realpath` (symlinks, junctions and 8.3 names resolved with the native realpath), is a directory inside a known project root or the user's home. Refused with a stable code: UNC and device paths (`\\server\share`, `//server/share`, `\\?\...`, also when a mapped drive resolves to one), any `..` segment, relative and drive-relative paths, characters Windows forbids, alternate data streams, trailing dots and spaces, symlinks that escape. Comparison is case-insensitive on Windows. A filesystem root is never accepted as a root. **This decides where a terminal starts; it is not a sandbox**: a shell can `cd` anywhere the user can.
+7. **The child environment** (`src/terminal/env.ts`): the daemon's environment (which came from the user's shell) minus: `DAEMON_*`, `AI_ASSISTANT_*` (the hook token variable), `AIA_*`, `MIRA_*`; every variable of the table in [Environment](#environment) (`DATA_DIR`, `DEV_ORIGINS`, `WEB_DIST`, `CLAUDE_BACKEND`, `CLAUDE_AUTH_MODE`, `DEMO`, `LOG_LEVEL`, `RETENTION_DAYS`, `BUDGET_*`, `STALE_*`, `TERMINAL_*`); **`ANTHROPIC_API_KEY`** (the chat lane's budgeted key: your own `claude` signs in by itself, and the daemon never hands its key to it nor silently turns a subscription login into API billing; set a key inside the terminal if you want one there); token-shaped names with a daemon-flavoured prefix (`STAGE_TOKEN`, `HOOK_TOKEN`, `EXCHANGE_CODE`, `SESSION_TOKEN`, `COOKIE_SECRET`...); and the package manager's "inside an npm script" markers when you started the daemon with `pnpm start` (`npm_lifecycle_*`, `npm_package_*`, `npm_command`, `npm_execpath`, `INIT_CWD`...). The user's own credentials stay (`AWS_SESSION_TOKEN`, `GITHUB_TOKEN`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN`...). `TERM=xterm-256color` and `COLORTERM=truecolor` are set. A planted secret is checked not to reach the child in both a unit test and a real-PTY test. Consequence: Claude Code hooks from a Claude started inside the app reach the daemon only if the hook token is embedded in `settings.json` (`hooks install --embed-token`) or the user exports `AI_ASSISTANT_HOOK_TOKEN` in that shell themselves.
+8. **Credentials.** The daemon never reads, copies, stores or proxies Claude's login. "Claude" means the user's own `claude` (`CLAUDE_EXECUTABLE`, else a PATH search that honours `PATHEXT`, empty and relative PATH entries ignored); if it is not found the API answers `422 claude_not_found` with install help. `TERMINAL_CLAUDE_COMMAND` exists only for tests.
+9. **Audit** (`src/terminal/mount.ts`): enable, disable, open, close (by you, idle, switch off, daemon stopping), exit (with the exit code) and refusals (with the refusal code). Each entry has the terminal's kind and id only: **never keystrokes, output or the folder**. Logs carry ids, kinds and exit codes, never bytes.
+10. **Killing.** Closing, switching off, idle close and graceful shutdown (SIGINT, SIGTERM, SIGBREAK) kill the whole process tree. Windows: `taskkill /PID <pid> /T /F` with `execFile` and an argument array from `%SystemRoot%\System32` (never a shell string, `windowsHide`). Elsewhere: SIGTERM to the process group (`kill(-pid)`) plus a hang-up of the PTY, SIGKILL to the group after 2 s, and pid 0 or 1 are refused so `kill(-1)` can never happen. A process `exit` handler hard-kills the trees synchronously if the daemon ends without a graceful stop (a crash, the shutdown watchdog's `process.exit`).
+11. **The browser** loads xterm.js lazily (a separate chunk, only when the Terminal tab opens), loads no link or clipboard addon (a terminal cannot write your clipboard or make clickable links), shows a permanent "runs commands as you" note, and stores nothing.
+
+### Lifecycle and protocol
+
+`POST /api/terminals {kind: "claude"|"shell", projectId?, cwd?, cols?, rows?}` returns `201` with a `TerminalInfo` (`running`). `GET /api/terminals` lists them, `GET /api/terminals/:id` reads one. `DELETE /api/terminals/:id` kills a running terminal's tree and removes it, or just removes an exited one (`204`). A terminal that ends by itself (the user typed `exit`, claude quit, a crash) stays listed as `exited` with its exit code, and a late attach still replays its last output, until it is deleted. The list is part of the snapshot (`terminals`); a change publishes a coalesced `snapshot.reset`.
+
+Socket flow: `POST /api/terminals/:id/ticket` then `GET /ws/terminal/:id` (Upgrade) then text `{type:"auth",ticket}` then `{type:"ready",replayBytes}` then `replayBytes` of binary scrollback then live binary frames; the client sends binary keystrokes and text `{type:"resize",cols,rows}` (10 to 500, 5 to 200); the server ends with `{type:"exit",exitCode}` and closes (1000). The browser reconnects with a **fresh ticket** and the daemon replays; the process keeps running while the browser is away.
+
+The replay is the **recent output as bytes, not a screen snapshot**: after a reload a full-screen program (Claude Code redraws in place) shows its recent output, and the replay can begin in the middle of a line or an escape sequence once the ring buffer has wrapped.
+
+### Windows notes (reasoned about and unit-tested with Windows-style strings, never run on Windows)
+
+- **ConPTY** through node-pty (`encoding` is not passed on Windows; ConPTY output is always a string and is re-encoded as UTF-8). The pid used for the tree kill is node-pty's inner pid (the shell or program itself).
+- **`claude.exe` resolution**: `PATHEXT` is honoured (only `.exe .com .cmd .bat` can run), `.exe` wins over a `.cmd` shim in the same folder, `.ps1` is ignored. A `claude.cmd` (the npm shim) is started as `cmd.exe /d /s /c ""<path>""` using the System32 `cmd.exe`; a path containing `"` or `%` is refused. `CLAUDE_EXECUTABLE` may omit the extension.
+- **Shell**: `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo` (your profile loads), else `powershell.exe` on PATH, else `COMSPEC`, else `cmd.exe`. Elsewhere `$SHELL` when absolute and executable, else `/bin/sh`.
+- **`taskkill`** is the only way the tree is ended. If a process survives (a service that re-parents itself, a process in another job object) it is not killed.
+- Paths: drive letters required, UNC refused, comparison case-insensitive; `realpath.native` is expected to return the canonical case and long names (not verified on Windows).
+- A daemon killed with `taskkill /F` or a power loss gives no chance to clean up: on Linux closing the PTY master hangs the children up (checked in `e2e-terminal.mjs`); whether ConPTY children die with the daemon on Windows is **unverified**.
+
+### Tests
+
+`test/terminal.config`, `terminal.cwd` (Windows and POSIX strings on an in-memory file system, real symlinks), `terminal.env` (rule and planted secrets), `terminal.launch` (claude and shell resolution, `PATHEXT`, `.cmd` wrapping, the exact `taskkill` and signal calls), `terminal.tickets` (single use, expiry, binding, rate limit, scrollback ring, token bucket), `terminal.service` (fake PTY: limits, one client, replay, input cap and rate, resize, exit codes, close, escalation, shutdown, idle), `terminal.api` (the disabled gate, Origin, Host, content type and cookie on every route, validation, snapshot and events, audit contents, real HTTP framing), `terminal.ws` (handshake refusals, auth frame, ticket reuse, cross-terminal, expiry, session binding, one client, binary input, resize, exit, slow consumer, shutdown), `terminal.pty` (**real node-pty** with tiny node programs and a real `sh`: output, typing, resize, exit codes, environment, tree kill, shutdown, the whole daemon over HTTP and WebSocket), `terminal.lanes` (no lane or tool can reach a terminal). End to end, in a real Chromium: `node apps/web/scripts/e2e-terminal.mjs` (`pnpm --filter @ai-assistant/web e2e:terminal`). `src/terminal/testing.ts` holds the fake PTY, recording sink, fake tree killer and in-memory file system the tests use; `test/terminalHarness.ts` builds a daemon around them.
+
+## Stage
+
+The long-term interface is a live 3D assistant in an empty "cerebral space" ([docs/CEREBRAL-SPACE.md](../../docs/CEREBRAL-SPACE.md), [ADR 0008](../../docs/adr/0008-stage-protocol-and-engine-choice.md)). **The daemon owns the character** (identity, appearance, wardrobe, scene, mood, memory, performance) and talks to a replaceable **stage** (Unreal, Unity, the web room, or the headless simulator) over the `mira-stage/1` contract (`packages/shared/src/stage.ts`). The pure logic lives in `packages/stage-core`; this section is the daemon's part: SQLite, the socket, REST, the lane wiring. Code: `src/stage/`, `src/store/stageStore.ts`, tests: `test/stage*.test.ts`, browser side: `apps/web/src/stage/` and Settings, Stage.
+
+It is **on by default** (`PUT /api/settings/stage {on}` switches it off: no stage can connect, the stage tools answer politely, nothing is sent). With nothing connected it still works as a backend: mood, wardrobe, scene and memory exist, the dashboards can edit them, and the draft web room follows her.
+
+### Connect a stage
+
+1. Start the daemon. The banner prints where the socket is and **where the token lives, never the token**: `ws://127.0.0.1:PORT/ws/stage`, and `secrets.json` (key `stageToken`).
+2. Read the token with `pnpm --filter @ai-assistant/daemon exec tsx src/stage/cli.ts token` (add `--rotate` to replace it; a running daemon follows a rotated file; a connected stage keeps its socket). Treat it like the hook token: do not paste it into chat, a URL or a screenshot.
+3. The stage connects with `Authorization: Bearer <token>` (no cookie, no query string), sends `hello` first, then answers every command. The headless simulator does exactly this: `connectSimulator()` in `src/stage/simClient.ts` (used by the tests and by `apps/web/scripts/e2e-stage.mjs`).
+
+### The stage socket: who may connect
+
+Checked in this order, all **before** the upgrade completes (a plain HTTP answer, no socket is created), in `src/stage/upgrade.ts` and `security.checkStageUpgrade`:
+
+| # | Check | Refusal |
+|---|---|---|
+| 1 | the peer address is loopback (the daemon only listens on `127.0.0.1`; this is the explicit second lock) | `403 not_loopback` |
+| 2 | the path is exactly `/ws/stage`; anything else under it (`/ws/stage/`, `/ws/stagex`) is answered here, the browser socket handler leaves it alone | `404` |
+| 3 | **no query string at all** (a token in a URL would reach logs and history): refused before anything else is read | `400 no_query` |
+| 4 | `Host` is `127.0.0.1:PORT` or `localhost:PORT` | `403 forbidden_host` |
+| 5 | `Origin` is **absent** (an engine is not a browser) or allowlisted (own origins plus `DEV_ORIGINS`) | `403 forbidden_origin` |
+| 6 | `Authorization: Bearer <stage token>`, compared in constant time (both sides hashed to equal-length digests, `crypto.timingSafeEqual`). **The cookie header is never read.** | `401 unauthorized` |
+| 7 | the stage switch is on | `403 stage_disabled` |
+| 8 | no other stage is connected | `409 stage_busy` |
+
+The stage token is a new secret in `secrets.json` next to the hook token (256 random bits, separate from it: neither opens the other's door). It is registered as a secret literal of the logger, so a line that held it would be masked. **The browser cookie does not work on the stage socket, and the stage token does not work on any browser route** (`401`), including the dashboards' own `/ws`; both are tested over real sockets and real HTTP, and in the real Chromium run. A plain HTTP `GET /ws/stage` answers `401` without the token and `426` with it. A Phase 1 `secrets.json` without a stage token gets one on the next start.
+
+**One stage at a time.** A second authenticated connection is refused (`409 stage_busy`) until the first closes. A crashed engine closes its socket at once on loopback, and a half-open one is dropped by the ping (every 30 s; a missed pong drops it). "The newest wins" was rejected on purpose: it lets two stages fight forever. Settings, Stage has a **Disconnect** button (`DELETE /api/stage/connection`) for a stuck one.
+
+After the upgrade the `StageSession` of stage-core wraps the socket: the stage speaks first (`hello`, within `hello timeout`, else `4001`), a protocol mismatch or an invalid hello is **refused and the socket closed**, nothing is sent before the hello, commands are validated and tracked until `command.done` or `command.failed`, in-flight commands are bounded, and the session adapts to the capabilities the stage declared: constructs it cannot draw (and their data) are skipped, a rig it does not support or too many characters fail with a reason, and the face comes from the backend (ARKit-52 frames) or from the stage's own audio-to-face. Limits: messages from the stage above 256 KB close the socket (`1009`), a client whose unsent buffer passes 4 MB is dropped, binary frames sent by a stage are ignored (counted), audio and face frames go out only while the transport is under its high-water mark.
+
+### Resume
+
+The hub rebuilds a (re)connecting stage **from the database, never from what the stage last acknowledged**, so changes made while it was away (or before a daemon restart) are not lost: `character.load` for the active assistant and your character (outfit, sliders, voice), `scene.load` (objects, constructs, the active camera, lighting), her mood as `perform.affect`, what she was doing (idle profile, posture, gaze) when this process knows it, then every construct's data as a full replace. Her mood is persisted (at most every 30 s and at shutdown) and decays from the time it was written. A daemon restart is covered by `test/stage.ws.test.ts` and by `e2e-stage.mjs` (outfit, camera, a body slider and the knowledge graph come back on a new simulator).
+
+### REST
+
+All routes need the session cookie, an allowlisted `Origin` on mutations and `Content-Type: application/json` (the ordinary gate). Bodies are validated with the zod schemas in `packages/shared/src/daemon.ts` (`400 invalid_request` with the field named), then by the stage-core services. Every mutation is **audited, refusals included** (outcome `blocked`, with the code), delivered to the connected stage, and announced to the dashboards with a `stage.live` event whose `rev` changed. A refused change changes nothing.
+
+| Refusal | Status and code |
+|---|---|
+| a slider outside the range the base declares | `422 param_out_of_range`: "Height (cm) must be between 162 and 190 (you sent 250). The sliders are bounded to adult proportions." (stage-core would clamp silently, which hides client bugs, so the daemon **refuses**) |
+| a parameter combination that reads as childlike, even when every value is inside its range | `422 adult_envelope` |
+| an unknown parameter or a bad colour | `422 invalid_params` |
+| taking off the last piece of a full outfit, an outfit preset that would leave her half dressed | `422 baseline` / `invalid_preset` |
+| an asset whose licence does not allow personal use (or whose licence is unknown), as clothing or as a scene object | `422` with the licence in the message (`licence` for scene objects) |
+| a prop worn, a piece in a slot it does not fit, a base that is not adult | `422` |
+| an unknown character, preset, asset, object or camera shot | `404` (`422 unknown_shot` for a shot name) |
+| an id that already exists (object, catalog entry; **existing catalog entries are never replaced**) | `409` |
+| the stage switch is off | `409 stage_disabled` |
+
+`POST /api/stage/assets {manifest}` registers a catalog entry. It is **metadata only**: the stage-core catalog validates it (a character base must attest `adult: true` and its slider ranges must sit inside the adult envelope, locators cannot escape the content root and carry no credentials, the licence record must be coherent). A "not for personal use" entry is stored, shown with its licence, and unusable.
+
+### What is stored (schema version 3)
+
+`src/store/stageStore.ts` is the only SQL for the stage. Migration 3 adds: `stage_assets` (the catalog, **metadata only**, licence flags in columns plus the manifest JSON), `stage_characters`, `stage_outfit_presets` (the wardrobe presets of each character: the character row carries none), `stage_active` (the active character per role), `stage_scene` (the working scene) and `stage_scene_presets`, `stage_memory` (episodes, relationship facts and preferences with their sensitivity), `stage_mood` (one row). Settings (`settings.stage`, `stage.seeded`, the outfit director's history) are in `kv`. Migrations are tested from an empty database and from a Phase 1 (schema 2) database with data. A row that no longer validates reads as missing instead of throwing.
+
+**The seed runs once per database** (marker `stage.seeded`): the seed catalog (30 metadata entries: three rig families of adult bases, hair, tailored dark pieces, structured outerwear, training wear, understated metal accents, two props and the void), the default assistant (named from the persona, the **AUTHORITY** presence: upright, economical, long steady gaze, measured pace, high dominance with low arousal), **your representation as an abstract, faceless form** (no face is modelled and **no face capture is used or needed**), and the empty "cerebral void" scene with two scene presets. Afterwards the database is the truth: your edits are never overwritten by a later start. On every start the characters are repaired against the catalog (an item whose asset vanished or whose licence changed is taken off, the clothed baseline is refilled).
+
+### Content rules
+
+Every character is an **adult**: slider ranges are bounded (apparent age 28 to 58 on the seed bases, height 162 to 190 cm, bounded head scale, jaw definition, eye size, roundness and leg length), the whole parameter set is judged as a combination (a combined youthfulness limit), and the daemon refuses anything outside. Seed entries and presets are tasteful and professional or athletic, and **a fully clothed baseline is always kept**: no operation (a slider, a preset, the assistant's own tool, a restore) can leave her undressed. Nothing revealing, lingerie or sexualised exists as a default anywhere. The licence of every asset travels with it and is judged on every use; "adult expression" is a separate flag that must be explicitly true for uses that need it, and nothing in the product uses it.
+
+### How the lane drives her
+
+`app.ts` builds the stage **before** the lane and hands the lane factory a second argument, `{ stageTools }`, which `main.ts` merges into the lane's tools (`createStageToolBindings`: `stage_set_outfit`, `stage_set_scene`, `stage_gesture`, `stage_camera`, `character_remember`, `stage_state`; cosmetic and reversible, tiers T0 to T2, so `character_remember` asks for a card). They act through the services, never throw, and every use is audited as her (the memory text is **never** copied into the audit log). The hub listens to the same bus the lane publishes on:
+
+| Signal | Effect |
+|---|---|
+| `avatar` `speak` (one per finished sentence) | queued in the **speech pipeline**: TTS, then `perform.speak`, audio frames and face frames (`FakeTtsProvider` and `FakeFaceProvider` by default: a quiet tone and a face derived from its energy; the `TtsProvider` and `FaceProvider` interfaces are where real engines plug in). She speaks once the stage has finished loading her: a sentence in the first moments after a connect is text only. |
+| a user `chat.message` | barge-in (she stops talking), the behaviour director wakes, the camera calls it a conversation; a thank-you or a criticism nudges her mood a little (local, never logged); a message after 10+ minutes away is a small lift |
+| `POST /api/chat/interrupt` | barge-in |
+| `chat.done` (a reply finished) | `task_completed` (small) |
+| `approval.new` / `approval.resolved` | she reviews it with you (profile shot); approved lifts her, denied costs a little composure |
+| `avatar` `pose thinking` / `lookAt` / `expression` | the thinking expression is held; a gaze target; a strong sad, angry, surprised or shy expression is a beat for the camera |
+| long silence, late hours, quiet hours | by the behaviour director: arousal drops and she gets sleepy, then asleep inside the persona's quiet hours until you write; **never** valence (no sulking, no guilt) |
+| `user.presence`, `character.interact` from the stage | presence reaches the director; an interaction is region-level and never escalating |
+| `session.update`, `snapshot.reset` | the construct feeds recompute |
+
+Her **persistent character memory** (`character_remember`, stored in `stage_memory` with a sensitivity per item) goes into the persona prompt as a digest through `LaneOptions.digest`, for the **cloud audience only**: private and sensitive items are kept but never sent (`test/stage.wiring.test.ts` checks it across a restart). The hub never writes a memory by itself.
+
+The **behaviour director ticks on a timer** (1 s): idle profile, posture, gaze, gestures shaped by her presence style, her mood as `perform.affect`; the **camera director** follows the conversation (wide idle, medium while talking, a close-up for an emotional beat, profile when reviewing, a pinned shot when you or her tool asked for one) with hysteresis so it never jitters. Replies to the user are always allowed by the interruption budget; unprompted speech is not built.
+
+**Constructs are fed from the store, as minimal `scene.data` diffs** (`src/stage/constructs.ts`): sessions become a `session_orbit` (it appears with the first session and leaves a minute after the last; a blocked one flares), your notes become a `knowledge_graph` with a computed 3D layout. The first push is a full replace, later ones carry only what changed (a status change is one small merge), nothing is sent when nothing changed. **The notes are the fixture notes of the Brain screen until the real vault exists (Phase 2).** Terminals are never drawn: keystrokes or resizes sent by a stage pane (`construct.terminal.*`) are **dropped and counted**, and the stage has no path to the embedded terminals (see the checks in `test/terminal.lanes.test.ts`, which still pass).
+
+### The dashboards and the draft web stage
+
+The snapshot carries `stage` (`StageSnapshot`: characters, catalog with licences, scene, scene presets, mood, the attached stage and its capabilities, the OutfitDirector's suggestion with its explanation). The additive `stage.live` event (`StageLive`) carries the light live state: connection, mood, idle profile, posture, gaze, speaking, camera. It is **rate limited** (a structural change, a connect, a disconnect: at once; fine changes at most every 1.5 s) so it cannot flood the 2000-event replay buffer; `rev` changing means "refetch `GET /api/stage`".
+
+Settings, **Stage** (daemon mode only; the mockup says it needs the daemon and shows nothing made up) has: the connection and the capabilities the stage declared, a Disconnect button, the mood readout, the character picker (hers and yours), the appearance sliders with their allowed ranges (a box beside each lets you type a value, so a refusal is visible), the presence sliders and baseline mood, the wardrobe (slots, outfit presets with apply, save and delete, the OutfitDirector's suggestion, the pieces that fit her with their licence note), the scene (presets, objects with add and remove from the catalog, camera shots, what the space draws from your data) and the catalog with every licence.
+
+The **draft stage** (`apps/web/src/stage/draftStage.ts`) is the existing three.js room following the backend: her mood as the expression, where she looks, asleep when the backend says so. It declares limited capabilities honestly (no outfits, no constructs, no speech audio, no camera shots, no tracking; the Settings card lists them) and it follows the `stage.live` feed rather than the stage socket, because a browser cannot send the bearer token and the cookie is refused there on purpose.
+
+### Windows (reasoned about, never run on Windows)
+
+Paths use `node:path`; the secrets file and the data directory are the existing ones; the socket is loopback only; nothing in `src/stage/` shells out or sends signals. `e2e-stage.mjs` calls the build tools through the shell on Windows (`.cmd` shims). None of it has run on Windows.
+
 ## What is real and what is mock
 
 | Snapshot part | Source |
@@ -154,6 +321,8 @@ On `resync:true` the client refetches `GET /api/snapshot`, replaces its state, a
 | `costDays`, `usageBlock` | **Real, from lane spend** (API-equivalent estimate). 14 zero days on a fresh install. The usage block is a placeholder (`usedPct` 0, window at the top of the hour) because the plan's real 5-hour window is invisible to the daemon. Hook sessions carry no cost (see below). |
 | `settings.claude` | **Real**: mode, status, lane budgets and spend from the `BudgetGuard`, SDK version. The `int-claude` integration row says `mock` for the fake backend, `needs_auth` for sdk without a key. |
 | `settings.persona`, `trustRules` (modes, counts), `guestMode`, `webcam`, `audit` | **Real**, persisted. Fresh installs start with zero trust counters; promotion is suggested after 10 approvals without a rejection. |
+| `terminals`, `settings.terminals` | **Real**: the embedded terminals and their on/off switch (see [Terminal](#terminal)). |
+| `stage` | **Real**: characters, wardrobe, scene, mood, the attached stage, from SQLite and the live hub (see [Stage](#stage)). The catalog entries are placeholders (metadata only, no binary); the notes the knowledge graph draws are the fixture notes; speech uses the fake TTS and face. |
 | `learned`, `proposals` decisions | Fixture content, **decisions persisted**. |
 | `briefing`, `notes`, `memory`, `calendar`, `mail`, `contacts`, `finance`, `world`, other `integrations`, `privacy`, `vault` | **Mock fixtures** from `@ai-assistant/shared/fixtures`. |
 
@@ -173,7 +342,7 @@ Options: `--port`, `--skip <Event>` (repeatable), `--embed-token`, `--config-dir
 
 1. Start the daemon once (it creates `secrets.json`).
 2. `hooks install --apply`. It resolves `CLAUDE_CONFIG_DIR` or `~/.claude`, writes `settings.json.bak-<UTC timestamp>` first, keeps every other setting and hook, appends our handlers as separate groups, and is idempotent (a second run changes nothing, never duplicates). A settings file it cannot parse, or a `hooks` value of the wrong shape, is left untouched with an error. CRLF and indentation are preserved.
-3. Make the token available to Claude Code: by default the header is `Authorization: Bearer $AI_ASSISTANT_HOOK_TOKEN` with `allowedEnvVars`, so no secret sits in `settings.json`. Set that variable where you start `claude`: `setx AI_ASSISTANT_HOOK_TOKEN <token>` on Windows (then open a new terminal), `$env:AI_ASSISTANT_HOOK_TOKEN = '<token>'` for one PowerShell session; `hooks token` prints the value. Or use `--embed-token` to write the literal token (then treat `settings.json` as a secret).
+3. Make the token available to Claude Code: by default the header is `Authorization: Bearer $AI_ASSISTANT_HOOK_TOKEN` with `allowedEnvVars`, so no secret sits in `settings.json`. Set that variable where you start `claude`: `setx AI_ASSISTANT_HOOK_TOKEN <token>` on Windows (then open a new terminal), `$env:AI_ASSISTANT_HOOK_TOKEN = '<token>'` for one PowerShell session; `hooks token` prints the value. Or use `--embed-token` to write the literal token (then treat `settings.json` as a secret). A `claude` started in an **embedded terminal** does not inherit the variable from the daemon (see [Terminal](#terminal)): use `--embed-token` or export it in that shell.
 
 Each handler is `{type:"http", url:"http://127.0.0.1:PORT/hooks/<Event>", timeout: 2, onFailure:"continue", headers, allowedEnvVars}` (`timeout: 1` for `SessionEnd`, which only gets a 1.5 s budget) for `NON_BLOCKING_HOOK_EVENTS`. `PreToolUse` is deliberately never hooked. **These field names come from the research notes and `spikes/hooks/settings.snippet.json`, not from a live read of the Claude Code hooks reference**; if Claude Code reports a settings validation error, check https://code.claude.com/docs/en/hooks. `PermissionRequest` is in the default set (as `NON_BLOCKING_HOOK_EVENTS` has it), but [ADR 0003](../../docs/adr/0003-monitoring-hooks-and-roster.md) says to observe it only if spike (b) shows that an empty `200 {}` reply does not auto-decide the prompt: until you have checked that on your PC, install with `--skip PermissionRequest`.
 
@@ -201,7 +370,7 @@ Sessions are tied to projects by `cwd` (the git root when it can be found on dis
 
 ## Data
 
-`DATA_DIR`: `app.db` (+ `-wal`, `-shm`; or `demo.db`), `secrets.json`, `agent/` (the lane's scratch working directory). SQLite runs in WAL mode with foreign keys on and a 5 s busy timeout; the schema is versioned with `PRAGMA user_version` (idempotent migrations, a newer database is refused). Tables: `events`, `projects`, `sessions`, `agents`, `agent_events`, `tasks`, `approvals`, `chat_messages`, `audit`, `kv`, `usage`, `lane_sessions`. SQL exists only under `src/store`. `Store.backup(dest)` uses the SQLite backup API (never copy the file under WAL); there is no scheduled backup yet. Lane approvals left pending by a previous run are closed as denied at boot, since their turn no longer exists.
+`DATA_DIR`: `app.db` (+ `-wal`, `-shm`; or `demo.db`), `secrets.json`, `agent/` (the lane's scratch working directory). SQLite runs in WAL mode with foreign keys on and a 5 s busy timeout; the schema is versioned with `PRAGMA user_version` (idempotent migrations, a newer database is refused). Tables: `events`, `projects`, `sessions`, `agents`, `agent_events`, `tasks`, `approvals`, `chat_messages`, `audit`, `kv`, `usage`, `lane_sessions`, and the stage's `stage_assets`, `stage_characters`, `stage_outfit_presets`, `stage_active`, `stage_scene`, `stage_scene_presets`, `stage_memory`, `stage_mood` (schema version 3, see [Stage](#what-is-stored-schema-version-3)). `secrets.json` also holds the `stageToken`. SQL exists only under `src/store`. `Store.backup(dest)` uses the SQLite backup API (never copy the file under WAL); there is no scheduled backup yet. Lane approvals left pending by a previous run are closed as denied at boot, since their turn no longer exists. Terminal bytes are never stored: not in SQLite, not in files, not in logs.
 
 ## Windows notes
 
@@ -209,12 +378,13 @@ Sessions are tied to projects by `cwd` (the git root when it can be found on dis
 - The daemon is a user-session app, not a service (camera and audio live in the browser). No installer.
 - It listens on IPv4 loopback only. `localhost` can resolve to `::1` first; browsers fall back to `127.0.0.1`, but `Host: [::1]:PORT` is rejected on purpose.
 - Windows Defender real-time scanning can slow SQLite and the web build; exclude the data dir if it matters. Loopback-only listeners normally do not trigger a firewall prompt.
-- better-sqlite3 is a native addon: it needs a prebuilt binary for your Node, or build tools.
+- better-sqlite3 is a native addon: it needs a prebuilt binary for your Node, or build tools. node-pty (embedded terminals) is one too: its package ships Windows prebuilds, and a failure to load it only disables terminals (`pty_unavailable`), not the daemon.
 - `chmod 0600` has no effect on Windows; the profile ACLs protect `secrets.json`.
+- Terminals: see [Windows notes under Terminal](#windows-notes-reasoned-about-and-unit-tested-with-windows-style-strings-never-run-on-windows).
 
 ## Tests
 
-`pnpm --filter @ai-assistant/daemon typecheck` and `... test` (vitest, no network, sockets only on `127.0.0.1` ephemeral ports, temp directories). Files in `test/`: `config`, `redact`, `store` (migrations from empty and from an older version, repositories, backup), `security` (every rejection path), `hooks` (lifecycle, permission, notification, subagent tree, garbage, dedupe, staleness with an injected clock, redaction, retention), `bus` and `ws` (resume, epoch change, gap, slow client, heartbeat, limits, shutdown), `api` (snapshot validity in empty and demo modes, chat, approvals, proposals, tasks, settings, learned facts, costs, restarts), `static` (CSP, SPA fallback, traversal), `cli` (print, install, uninstall, idempotency), and `integration.agent-core` (the real Secretary lane with the fake backend and real SQLite through the daemon).
+`pnpm --filter @ai-assistant/daemon typecheck` and `... test` (vitest, no network, sockets only on `127.0.0.1` ephemeral ports, temp directories). Files in `test/`: `config`, `redact`, `store` (migrations from empty and from an older version, repositories, backup), `security` (every rejection path), `hooks` (lifecycle, permission, notification, subagent tree, garbage, dedupe, staleness with an injected clock, redaction, retention), `bus` and `ws` (resume, epoch change, gap, slow client, heartbeat, limits, shutdown), `api` (snapshot validity in empty and demo modes, chat, approvals, proposals, tasks, settings, learned facts, costs, restarts), `static` (CSP, SPA fallback, traversal), `cli` (print, install, uninstall, idempotency), and `integration.agent-core` (the real Secretary lane with the fake backend and real SQLite through the daemon), the `terminal*` files described in [Terminal](#terminal) (the `terminal.pty` ones use a real PTY and are skipped on Windows), and the `stage*` files: `stage.store` (migration 3 from empty and from a Phase 1 database, every repository, corrupt rows, the seed once, the restore), `stage.api` (every route's rejection paths: gate, validation, 404, out-of-range and adult-envelope refusals including the extremes of every slider, baseline, licence, catalog registration, the switch, audit and events), `stage.security` (the token: created, rotated, constant-time verdicts, Host then Origin then token, never in logs, banner, config or any response), `stage.ws` (a **real WebSocket server**: every upgrade refusal, one connection at a time, hello and protocol mismatch, capability adaptation, stage events, resume after a reconnect and after a daemon restart, the secrets file), `stage.hub` (mood signals, quiet hours, the camera following the conversation, the lane's avatar events, construct feeds as minimal diffs, the tools, shutdown), `stage.wiring` (the **real Secretary lane with the fake backend, a real SQLite file and the simulator over a real WebSocket**: a chat message becomes `perform.speak` plus audio and face frames, barge-in, the behaviour loop, the lane really gets the stage tools) and `stage.draft` (the draft web stage's mapping and the CLI). End to end in a real Chromium: `node apps/web/scripts/e2e-stage.mjs` (`pnpm --filter @ai-assistant/web e2e:stage`; it builds apps/web into a temp folder, never into `apps/web/dist`).
 
 ## Unverified and known limits
 
@@ -230,3 +400,8 @@ Nothing here has run against the live Claude API or on Windows.
 - Stale detection does not consult `claude agents --json` (the roster poll is not built).
 - A hook-observed permission cannot be answered from the app by design.
 - The lane's approvals from before a restart are closed, not resumed.
+- **Embedded terminals have only run on Linux**, with a real node-pty, `sh` and tiny node programs; ConPTY, `claude.exe`/`claude.cmd` launching, PowerShell, `taskkill` and Windows path handling are reasoned about and unit-tested with injected collaborators and Windows-style strings only. No real `claude` was started, nothing ran on a GPU PC, and the Terminal tab itself was only driven in a browser against the daemon-served build (REST and the terminal WebSocket were also checked through the Vite dev proxy with `TERMINAL_ALLOW_DEV_ORIGINS=1` using a node client, not a browser).
+- The terminal replay is a byte tail, not a screen snapshot (see [Terminal](#terminal)); a full-screen program may look incomplete after a reattach until it redraws.
+- Terminal process trees on Linux are ended by signalling the process group and by hanging up the PTY. A background job started with `setsid`/`nohup` in another session can outlive its terminal.
+- **Stage, what was NOT verified:** no real engine (Unreal, Unity) has connected, nothing ran on a GPU or on Windows, no real TTS or audio-to-face exists (the fakes produce a tone and a face derived from its energy), live Claude never drove the stage tools (the fake backend does not call them by itself; the tests call the very bindings the lane hands to the backend), and the web room (the draft stage) was only checked in a software-rendered Chromium. The protocol has no `character.unload`, so switching the active assistant loads the new one and leaves the old one on the stage until it restarts. `perform.speak` is acknowledged in order, so a stage still streaming assets answers late: the hub starts speaking only after the initial load, but a big outfit swap in the middle of a sentence delays the lip-sync frames of the next one on a slow stage (stage-core's pipeline drops stale face frames and never audio). The real-time behaviour (gaze, gestures, camera, mood curves) is unit-tested with fake clocks and exercised on the simulator, never judged by a human watching a rendered character. The seed licences are placeholders for metadata-only entries.
+- `TerminalService` has no stage binding: the stage protocol's `terminal_pane` (`construct.terminal.write/input/resize`) is not wired to it. If it ever is, it must go through `TerminalService.attach` (gated, one client, same limits) and never through a tool.

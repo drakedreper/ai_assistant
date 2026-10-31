@@ -16,6 +16,64 @@ export interface BudgetConfig {
   globalDailyUsd: number
 }
 
+/** Limits for the embedded terminals (apps/daemon/src/terminal). The first three and the test override come from environment variables, the rest are fixed defaults (tests override them). */
+export interface TerminalConfig {
+  /** Running terminals at once. */
+  maxTerminals: number
+  /** A running terminal with NO client attached is closed after this long (attached terminals are never idle-closed). */
+  idleTimeoutMs: number
+  /** Per-terminal output ring buffer replayed on attach. Memory only, never written to disk. */
+  scrollbackBytes: number
+  /** TEST ONLY (TERMINAL_CLAUDE_COMMAND): a command to run instead of the user's `claude`. JSON array or one path. */
+  claudeCommandOverride?: string
+  /**
+   * TERMINAL_ALLOW_DEV_ORIGINS=1: let the Vite dev server's origin (DEV_ORIGINS) use terminals too. Off by default:
+   * the session cookie is shared by every port on 127.0.0.1, so any OTHER app that happens to run on an allowlisted dev
+   * port (5173 is everyone's Vite default) could otherwise drive a terminal. Terminals answer to the daemon's own
+   * address only unless this is set.
+   */
+  allowDevOrigins: boolean
+  /** Largest client frame (keystrokes or a paste chunk). Bigger frames close the socket (1009). */
+  maxInputFrameBytes: number
+  /** Token bucket for keystrokes: burst size and sustained rate. */
+  inputBurstBytes: number
+  inputBytesPerSec: number
+  /** A client whose unsent buffer passes this is dropped (the terminal keeps running). */
+  maxBufferedBytes: number
+  ticketTtlMs: number
+  /** The first frame must be the auth frame within this long. */
+  authTimeoutMs: number
+  /** Exited terminals kept in the list (oldest are forgotten beyond this). */
+  maxExitedKept: number
+  /** How long a terminal gets to exit after a polite kill before the whole tree is killed hard. */
+  killGraceMs: number
+}
+
+/**
+ * The stage backend (apps/daemon/src/stage): the character, her wardrobe and scene, and the `mira-stage/1` socket.
+ * Everything here has a fixed default (tests override); the only on/off switch is the persisted Settings one.
+ */
+export interface StageConfig {
+  /** The value of the stage switch until the user sets it: ON in daemon mode. */
+  defaultOn: boolean
+  /** The behaviour loop (idle profile, gaze, gestures, camera, constructs). */
+  tickMs: number
+  /** The stage must send `hello` within this long after the socket opens. */
+  helloTimeoutMs: number
+  /** A stage socket is pinged this often; one that misses a pong is dropped. */
+  heartbeatMs: number
+  /** A stage whose unsent buffer passes this is dropped (slow consumer). */
+  maxBufferedBytes: number
+  /** Largest message accepted from the stage. */
+  maxMessageBytes: number
+  /** Seed of the behaviour variation (gaze, gestures): the same seed gives the same performance. */
+  seed: number
+  /** Construct feeds (session orbit, knowledge graph) are recomputed at most this often. */
+  constructsEveryMs: number
+  /** The mood is written to SQLite at most this often (and on shutdown). */
+  moodPersistEveryMs: number
+}
+
 export interface DaemonConfig {
   /** Always loopback. There is deliberately no way to configure this. */
   readonly host: '127.0.0.1'
@@ -52,6 +110,8 @@ export interface DaemonConfig {
   busBufferSize: number
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent'
   version: string
+  terminals: TerminalConfig
+  stage: StageConfig
 }
 
 export interface ConfigContext {
@@ -110,6 +170,12 @@ function parseNumber(name: string, raw: string | undefined, fallback: number, mi
   return n
 }
 
+function parseInteger(name: string, raw: string | undefined, fallback: number, min: number, max: number): number {
+  const n = parseNumber(name, raw, fallback, min, max)
+  if (!Number.isInteger(n)) throw new ConfigError(`${name} must be an integer`)
+  return n
+}
+
 function parseOrigins(raw: string | undefined): string[] {
   if (raw === undefined || raw.trim() === '') return [...DEV_ORIGINS_DEFAULT]
   const out: string[] = []
@@ -156,6 +222,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, ctx: Partial<Co
 
   const apiKey = env.ANTHROPIC_API_KEY?.trim() || undefined
   const claudeExecutable = env.CLAUDE_EXECUTABLE?.trim() || undefined
+  const claudeCommandOverride = env.TERMINAL_CLAUDE_COMMAND?.trim() || undefined
 
   const config: DaemonConfig = {
     host: '127.0.0.1',
@@ -187,6 +254,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, ctx: Partial<Co
     busBufferSize: 2000,
     logLevel,
     version: readVersion(),
+    terminals: {
+      maxTerminals: parseInteger('TERMINAL_MAX', env.TERMINAL_MAX, 4, 1, 16),
+      idleTimeoutMs: parseNumber('TERMINAL_IDLE_MINUTES', env.TERMINAL_IDLE_MINUTES, 240, 1, 7 * 24 * 60) * 60_000,
+      scrollbackBytes: parseInteger('TERMINAL_SCROLLBACK_KB', env.TERMINAL_SCROLLBACK_KB, 256, 16, 4096) * 1024,
+      ...(claudeCommandOverride ? { claudeCommandOverride } : {}),
+      allowDevOrigins: parseBool(env.TERMINAL_ALLOW_DEV_ORIGINS),
+      maxInputFrameBytes: 64 * 1024,
+      inputBurstBytes: 1024 * 1024,
+      inputBytesPerSec: 512 * 1024,
+      maxBufferedBytes: 1024 * 1024,
+      ticketTtlMs: 30_000,
+      authTimeoutMs: 5_000,
+      maxExitedKept: 8,
+      killGraceMs: 2_000,
+    },
+    stage: {
+      defaultOn: true,
+      tickMs: 1000,
+      helloTimeoutMs: 5000,
+      heartbeatMs: 30_000,
+      maxBufferedBytes: 4 * 1024 * 1024,
+      maxMessageBytes: 256 * 1024,
+      seed: 20_261_031,
+      constructsEveryMs: 4000,
+      moodPersistEveryMs: 30_000,
+    },
   }
   if (apiKey) Object.defineProperty(config, 'apiKey', { value: apiKey, enumerable: false, writable: true, configurable: true })
   return config

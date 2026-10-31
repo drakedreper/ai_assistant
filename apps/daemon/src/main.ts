@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { createBudgetGuard, createFakeBackend, createMockToolBindings, createSdkBackend, createSecretaryLane } from '@ai-assistant/agent-core'
 import { createDaemon } from './app'
 import { formatBanner } from './banner'
@@ -36,7 +37,9 @@ async function main(): Promise<void> {
     config,
     budget,
     log,
-    lane: (ctx) => createSecretaryLane({ ...ctx, backend, tools }),
+    // The stage tools (outfit, scene, gesture, camera, memory, state) join the lane's tools; the lane filters by lane and tier.
+    // Her persistent character memory goes into the persona prompt too, for the cloud audience only (never private or sensitive items).
+    lane: (ctx, { stageTools, memoryDigest }) => createSecretaryLane({ ...ctx, backend, tools: [...tools, ...stageTools] }, { digest: memoryDigest }),
   })
 
   const info = await daemon.start()
@@ -54,6 +57,17 @@ async function main(): Promise<void> {
   })) {
     process.stdout.write(`${line}\n`)
   }
+
+  // The stage socket: where it is and where the token lives. The token itself is NEVER printed.
+  process.stdout.write(
+    `${[
+      daemon.stage.hub.enabled()
+        ? `  Stage       ws://127.0.0.1:${info.port}/ws/stage  (for an engine or the simulator)`
+        : '  Stage       off (Settings, Stage)',
+      `              the stage token is in ${join(config.dataDir, 'secrets.json')} ("stageToken"), or run: pnpm --filter @ai-assistant/daemon exec tsx src/stage/cli.ts token`,
+      '',
+    ].join('\n')}\n`,
+  )
 
   let shuttingDown = false
   const shutdown = (signal: string): void => {
