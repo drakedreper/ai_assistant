@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+/* Design tokens. "Night study": ink backgrounds, glass panels, one warm accent for her, one hue per area. */
+@theme {
+  --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-canvas: #0a0c16;
+  --color-surface: #11142a;
+  --color-raised: #181c38;
+  --color-line: rgb(255 255 255 / 0.08);
+  --color-line-strong: rgb(255 255 255 / 0.16);
+  --color-fg: #e9ebf7;
+  --color-muted: #9ca4c9;
+  --color-faint: #6c7499;
+
+  --color-mira: #ff8fb1;
+  --color-work: #2dd4bf;
+  --color-brain: #a78bfa;
+  --color-life: #fb923c;
+  --color-money: #fbbf24;
+  --color-world: #60a5fa;
+
+  --color-ok: #4ade80;
+  --color-warn: #fbbf24;
+  --color-bad: #f87171;
+
+  --radius-panel: 16px;
+  --shadow-panel: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 12px 32px -12px rgb(0 0 0 / 0.6);
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 700px at 78% -10%, rgb(167 139 250 / 0.10), transparent 60%),
+    radial-gradient(900px 600px at 5% 110%, rgb(255 143 177 / 0.08), transparent 55%),
+    var(--color-canvas);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* Glass surface used by every panel. */
+.glass {
+  background: linear-gradient(180deg, rgb(24 28 56 / 0.72), rgb(17 20 42 / 0.72));
+  backdrop-filter: blur(14px) saturate(1.1);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
+}
+
+/* Thin scrollbars that match the theme. */
+* { scrollbar-width: thin; scrollbar-color: rgb(255 255 255 / 0.18) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: rgb(255 255 255 / 0.16); border-radius: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+:focus-visible { outline: 2px solid var(--color-mira); outline-offset: 2px; border-radius: 6px; }
+
+@keyframes pulse-dot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.8); } }
+.pulse-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
+@keyframes fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.fade-up { animation: fade-up .28s ease-out both; }
+@keyframes caret { 0%,100% { opacity: 1 } 50% { opacity: 0 } }
+.caret::after { content: "▍"; margin-left: 1px; color: var(--color-mira); animation: caret 1s steps(1) infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot, .fade-up, .caret::after { animation: none; }
+}

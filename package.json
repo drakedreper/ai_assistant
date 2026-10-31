@@ -1,0 +1,14 @@
+{
+  "name": "ai-assistant",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Local-first personal AI assistant: living room-window assistant + Claude Code mission control + second brain.",
+  "packageManager": "pnpm@10.28.0",
+  "engines": { "node": ">=22.12" },
+  "scripts": {
+    "dev": "pnpm --filter @ai-assistant/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  }
+}
