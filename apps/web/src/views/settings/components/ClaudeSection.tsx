@@ -241,6 +241,7 @@ const SERVER_META: Record<ToolSpec['server'], { label: string; icon: LucideIcon;
   finance: { label: 'finance', icon: Wallet, hint: 'Atlas, read-only' },
   worklog: { label: 'worklog', icon: Wrench, hint: 'Agent dashboard' },
   news: { label: 'news', icon: Newspaper, hint: 'Briefing items' },
+  stage: { label: 'stage', icon: Brain, hint: 'Her look, mood and space' },
 }
 
 const LANE_LETTER: Record<string, { letter: string; tone: 'mira' | 'neutral' }> = {
