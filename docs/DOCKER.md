@@ -53,7 +53,7 @@ Unity connects to `ws://127.0.0.1:7421/ws/stage` with the stage token. Print it 
 docker compose exec daemon node --import tsx src/stage/cli.ts token
 ```
 
-The token is a secret (it opens the stage door, nothing else); it lives in the volume, stays the same across restarts, and is never in the logs. Set it as `MIRA_STAGE_TOKEN` in the environment that starts Unity rather than saving it in a project file. The stage switch itself is in Settings, Stage.
+The token is a secret (it opens the stage door, nothing else); it lives in the volume, stays the same across restarts, and is never in the logs. Set it as `MIRA_STAGE_TOKEN` in the environment that starts Unity rather than saving it in a project file. The stage switch itself is in Settings, Stage. What the Unity side is, what is tested and how it gets built: [UNITY.md](UNITY.md).
 
 ## What is different from running it natively
 

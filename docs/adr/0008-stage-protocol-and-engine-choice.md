@@ -1,6 +1,6 @@
 # ADR 0008: Stage protocol and engine choice
 
-Status: Proposed (draft, 2026-10-31). Decision 1 (the backend owns the character, engines are replaceable stages) is implemented and reviewed as of 2026-11-01 (see the update at the end). The Unity vs Unreal choice (decision 3) is still pending the user's reference material and a Windows GPU spike.
+Status: Proposed (draft, 2026-10-31). Decision 1 (the backend owns the character, engines are replaceable stages) is implemented and reviewed as of 2026-11-01 (see the update at the end). The Unity vs Unreal choice (decision 3) was made by the owner on 2026-11-01: Unity first (see the last update); the spike on the RTX 5070 Ti is still to be run.
 
 ## Context
 
@@ -12,7 +12,7 @@ The current room is a three.js scene in the browser. It stays as a draft stage, 
 
 1. **The backend owns the character; engines are replaceable "stages".** The daemon holds identity, appearance parameters, wardrobe, scene, mood, memory and the live performance plan. A stage (Unreal, Unity, the web room, or a headless simulator) renders it and reports what happened. The contract is `packages/shared/src/stage.ts` (`mira-stage/1`): JSON commands down, JSON events up, binary frames for audio and face weights, one shared stage clock.
 2. **Faces are driven by ARKit-style blendshape weights**, the common denominator across VRM "perfect sync", MetaHuman and Character Creator rigs and NVIDIA Audio2Face-3D. The stage declares in `hello` whether it computes the face from audio itself (uLipSync, a runtime lip-sync plugin) or expects `FaceFrame`s from the backend.
-3. **Recommendation, to be confirmed by the user:** Unreal Engine 5.6+ as the realism target (same engine class as AION 2, MetaHuman integrated, the better-supported way to embed the render in the dashboard); Unity remains a strong option if the VTuber/VRM ecosystem and faster iteration matter more than top-end realism. Because of decision 1, the backend work is identical either way.
+3. **Recommendation (superseded by the owner's choice of Unity on 2026-11-01, see the last update):** Unreal Engine 5.6+ as the realism target (same engine class as AION 2, MetaHuman integrated, the better-supported way to embed the render in the dashboard); Unity remains a strong option if the VTuber/VRM ecosystem and faster iteration matter more than top-end realism. Because of decision 1, the backend work is identical either way.
 4. **Assets carry their licence** (personal use, commercial use, redistribution, VRM adult-expression flag). The backend refuses to equip or share an asset whose licence forbids it.
 
 ## Evidence (web search level, not primary-document level)
@@ -53,3 +53,17 @@ The user supplied six reference screenshots (a character creator stage, with DLS
 What this does not decide or prove: the engine, the realism of anything on screen, whether a stage can hold the frame budget on the RTX 5070 Ti, how a real TTS or Audio2Face-3D provider behaves behind the `TtsProvider` and `FaceProvider` seams (only deterministic fakes exist), and Windows behaviour. Known limits of the contract: there is no `character.unload` command (a stage keeps a character until it disconnects), and the adult envelope judges visible metadata only, so it assumes content packs the user chose to install (the seed catalog is metadata only and ships no binary assets).
 
 The engine decision still follows the order in the open questions above: the user's reference material, then a spike on the RTX 5070 Ti with the proposed gates (60 fps at 1440p with one character and a small scene, outfit swap under 1 s, audio-to-lip latency under about 120 ms).
+
+## Update 2026-11-01: the owner chose Unity as the first engine stage
+
+The owner decided: "I think unity engine is a good start. I want to essentially run a model and environment built in Unity, in the assistant room and character", and asked for the backend to run in Docker (done, [ADR 0009](0009-container-mode.md)) and to be prepared for building with Unity. This settles decision 3 for now: **Unity 6 with VRM 1.0 (UniVRM) is the first engine stage; Unreal and MetaHuman remain the later realism route.** Decision 1 is why this is cheap to revisit: the backend does not change with the engine.
+
+Costs accepted with the choice:
+
+- No Pixel Streaming equivalent (Unity Render Streaming has stalled), so the Unity stage runs in its own window and the browser room stays the draft stage. Embedding the render in the dashboard is dropped for now.
+- The realism ceiling of VRM with URP is below MetaHuman. It is judged again on the spike's measurements, not before.
+- Wardrobe on VRM means separate meshes rebound to the skeleton, which UniVRM does not solve. The first stage wears the clothes baked into the model (so the clothed baseline holds) and reports the seed wardrobe pieces as `asset.failed` until content exists.
+
+What was prepared without Unity (verified by tests, see [docs/UNITY.md](../UNITY.md)): the C# stage client in `unity/Packages/com.mira.stage` (the whole protocol, reconnect, credentials), golden fixtures shared with the zod contract (every command and event, recorded real traffic, constants, 3,069 locator cases), live tests against the real daemon, a C# port of the locator rules, and the ARKit-52 to VRM 1.0 expression arithmetic. Decided with it: the locator scheme stays content-pack-relative paths; the Unity stage maps them onto a content folder on the PC (`MIRA_CONTENT_DIR`) and the room `environments/cerebral-void` is built in the Unity project and registered under that name; a stage must succeed `character.load` whenever the base model loads (a failed one makes the session treat the character as not loaded).
+
+What this does not decide or prove: that the runtime compiles under Unity's compiler, that UniVRM loads the seed model, any frame rate, how the expressions look, the audio path. The gates are unchanged (60 fps at 1440p, outfit swap under 1 s, audio to lip under about 120 ms) and are measured on the PC by the session started from [spikes/unity/KICKOFF-PROMPT.md](../../spikes/unity/KICKOFF-PROMPT.md). Reopen the choice if the spike misses them, or when MetaHuman-class realism is wanted: a second stage then costs a new renderer, not a new backend.
