@@ -126,7 +126,11 @@ jobs:
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 15
-        run: pnpm -r typecheck
+        run: |
+          pnpm -r typecheck
+          $code = $LASTEXITCODE
+          Add-Content -Path (Join-Path $env:RUNNER_TEMP 'summary.txt') -Value "typecheck: exit $code"
+          exit $code
 
       - name: Unit tests per package (information)
         if: ${{ !cancelled() }}
@@ -134,6 +138,7 @@ jobs:
         timeout-minutes: 40
         run: |
           $ErrorActionPreference = 'Continue'
+          $sum = Join-Path $env:RUNNER_TEMP 'summary.txt'
           $bad = 0
           foreach ($p in 'shared', 'agent-core', 'stage-core', 'daemon') {
             $out = pnpm --filter "@ai-assistant/$p" test 2>&1 | Out-String
@@ -141,6 +146,8 @@ jobs:
             $lines = $out -split "`r?`n"
             Write-Host "== $p (exit $code)"
             $lines | Where-Object { $_ -match '^\s*(Test Files|Tests)\s' } | ForEach-Object { Write-Host $_ }
+            Add-Content -Path $sum -Value "unit ${p}: exit $code"
+            $lines | Where-Object { $_ -match '^\s*(Test Files|Tests)\s' } | ForEach-Object { Add-Content -Path $sum -Value ("  " + $_.Trim()) }
             if ($code -ne 0) {
               $bad++
               $failed = @($lines | Where-Object { $_ -match '^\s*FAIL\s+\S+' })
@@ -177,6 +184,10 @@ jobs:
           $lines = $out -split "`r?`n"
           Write-Host "== dotnet test (exit $code)"
           $lines | Where-Object { $_ -match '(Passed|Failed)! ' -or $_ -match '\[FAIL\]' -or $_ -match 'error ' } | ForEach-Object { Write-Host $_ }
+          $sum = Join-Path $env:RUNNER_TEMP 'summary.txt'
+          Add-Content -Path $sum -Value "csharp (dotnet test): exit $code"
+          $lines | Where-Object { $_ -match '(Passed|Failed)! ' } | ForEach-Object { Add-Content -Path $sum -Value ("  " + $_.Trim()) }
+          $lines | Where-Object { $_ -match '\[FAIL\]' } | Select-Object -First 15 | ForEach-Object { Add-Content -Path $sum -Value ("  " + $_.Trim()) }
           if ($code -ne 0) {
             Write-Host '---- the end of the output, with the failure messages'
             $lines | Select-Object -Last 160 | ForEach-Object { Write-Host $_ }
@@ -209,6 +220,8 @@ jobs:
             $skipped = @($pass | Where-Object { $_ -match 'skipped on Windows' })
             $fail = @($lines | Where-Object { $_ -match '^FAIL' })
             Write-Host "== $name (exit $code): $($pass.Count - $skipped.Count) passed, $($skipped.Count) not run on Windows, $($fail.Count) failed"
+            Add-Content -Path (Join-Path $env:RUNNER_TEMP 'summary.txt') -Value "e2e ${name}: exit $code, $($pass.Count - $skipped.Count) passed, $($skipped.Count) not run on Windows, $($fail.Count) failed"
+            $fail | Select-Object -First 8 | ForEach-Object { Add-Content -Path (Join-Path $env:RUNNER_TEMP 'summary.txt') -Value ("  " + $_.Trim()) }
             $fail | Select-Object -First 30 | ForEach-Object { Write-Host $_ }
             if ($fail.Count -eq 0 -and $code -ne 0) { $lines | Select-Object -Last 25 | ForEach-Object { Write-Host $_ } }
             return $code
@@ -228,6 +241,23 @@ jobs:
           $c3 = Run-Script 'e2e-terminal' 'apps/web/scripts/e2e-terminal.mjs'
           $c4 = Run-Script 'e2e-stage' 'apps/web/scripts/e2e-stage.mjs'
           if (($c1 + $c2 + $c3 + $c4) -ne 0) { exit 1 }
+
+      # Every information step above shows a green tick even when it found failures (continue-on-error). This step prints what
+      # they found in a few lines, as the end of the log and on the run's summary page, so the log needs no scrolling.
+      - name: Summary of the information steps (read this first)
+        if: ${{ !cancelled() }}
+        run: |
+          $f = Join-Path $env:RUNNER_TEMP 'summary.txt'
+          if (Test-Path $f) {
+            Write-Host '================ SUMMARY OF THE INFORMATION STEPS ================'
+            Get-Content $f | ForEach-Object { Write-Host $_ }
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### Information steps'
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+            Get-Content $f | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+          } else {
+            Write-Host 'no summary was written'
+          }
 
   old-node:
     name: better-sqlite3 on Node 22.12.0 (information only)
