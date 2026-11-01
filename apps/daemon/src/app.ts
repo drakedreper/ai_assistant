@@ -1,4 +1,3 @@
-import { mkdirSync } from 'node:fs'
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -16,8 +15,8 @@ import { HookService, type Scheduler } from './hooks/service'
 import { guards, securityHeaders } from './http/guards'
 import { createIdGen, type IdGen } from './ids'
 import { createLogger, type Logger } from './log'
-import { registerRoutes } from './routes'
-import { createSecurity, type Security } from './security'
+import { hideTerminals, registerRoutes } from './routes'
+import { createSecurity, ensurePrivateDir, ensurePrivateFile, hardenDbFiles, type Security } from './security'
 import { LANE_DEFAULTS, SnapshotBuilder } from './snapshot'
 import { createStageFeature, type StageFeature, type StageOverrides } from './stage/feature'
 import { createStaticHandler } from './static'
@@ -64,7 +63,7 @@ export interface CreateDaemonOptions {
 export interface StartInfo {
   port: number
   url: string
-  /** One-time sign-in link (printed once at startup). */
+  /** One-time sign-in link (printed once at startup). Its #fragment carries the terminal proof: never send it anywhere. */
   exchangeUrl: string
   code: string
 }
@@ -102,7 +101,14 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
 
   const ownsStore = !opts.store
   if (!opts.store && config.demo) resetDemoDb(config.dbFile)
+  // The data folder is private (POSIX: 0700) and the database files 0600: chat text, tasks and the audit log live there.
+  // The empty database file is created first with the right mode, so SQLite gives its -wal and -shm files the same one.
+  if (!opts.store && config.dbFile !== ':memory:') {
+    ensurePrivateDir(config.dataDir)
+    ensurePrivateFile(config.dbFile)
+  }
   const store = opts.store ?? openStore({ file: config.dbFile })
+  if (!opts.store) hardenDbFiles(config.dbFile)
 
   const security = createSecurity({
     dataDir: config.dataDir,
@@ -112,9 +118,10 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
     sessionTtlMs: config.sessionTtlMs,
     now: clock,
   })
-  // Exact secrets the daemon holds; every log line and stored summary is masked against them.
-  // (the stage token too: it must never reach a log line or a stored summary, and if it ever did it would be masked)
-  const literals = () => [security.hookToken(), security.stageToken(), ...(config.apiKey ? [config.apiKey] : [])]
+  // Exact secrets the daemon holds; every log line and stored summary is masked against them: the hook and stage tokens,
+  // the pending sign-in code, the session tokens issued by this run and the API key. main.ts does NOT inject its own
+  // logger any more (the one it used knew only the API key): this is the logger of the daemon.
+  const literals = () => [...security.secretLiterals(), ...(config.apiKey ? [config.apiKey] : [])]
   const log = opts.log ?? createLogger({ level: config.logLevel, literals })
 
   const bus = new EventBus({ bufferSize: config.busBufferSize, now })
@@ -134,6 +141,7 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
   let server: Server | undefined
   let terminals: TerminalFeature | undefined
   let stage: StageFeature | undefined
+  let unsubscribeRevoked: (() => void) | undefined
 
   const snapshots = new SnapshotBuilder({ config, store, bus, budget, lane: () => lane, now, terminals: () => terminals, stage: () => stage })
 
@@ -296,7 +304,7 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
 
     async start() {
       if (server) throw new Error('daemon already started')
-      mkdirSync(join(config.dataDir, 'agent'), { recursive: true })
+      ensurePrivateDir(join(config.dataDir, 'agent'))
 
       const s = createAdaptorServer({ fetch: app.fetch, overrideGlobalObjects: false }) as Server
       // Loopback only, but still: do not let a stalled local client hold a connection open for minutes.
@@ -320,6 +328,13 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
         hello: () => ({ backend: config.backend, version: config.version }),
         options: { maxClients: config.wsMaxClients, heartbeatMs: config.wsHeartbeatMs, maxBufferedBytes: config.wsMaxBufferedBytes },
         log,
+        // A dev-origin page (Vite) may read the feed but not the details of the embedded terminals.
+        transform: (event, ownOrigin) => hideTerminals(event, ownOrigin, config.terminals.allowDevOrigins),
+      })
+      // Signing out (this browser or every browser, or `revoke` on the command line) also closes what that session had open.
+      unsubscribeRevoked = security.onSessionsRevoked(() => {
+        wsHub?.dropRevoked()
+        terminals?.upgrade.dropRevoked()
       })
       terminals?.attach(s)
       stage?.attach(s)
@@ -334,12 +349,15 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
       }
 
       const { code } = security.issueExchangeCode()
-      return { port, url: `http://127.0.0.1:${port}`, exchangeUrl: `http://127.0.0.1:${port}/?code=${code}`, code }
+      // The terminal proof rides in the FRAGMENT of the sign-in link: a fragment is never sent to any server (not in the
+      // request, not in Referer), so only the page that opens the link ever has it. The page stores it for its own origin.
+      return { port, url: `http://127.0.0.1:${port}`, exchangeUrl: `http://127.0.0.1:${port}/?code=${code}#tp=${security.terminalProof()}`, code }
     },
 
     async stop() {
       if (stopped) return
       stopped = true
+      unsubscribeRevoked?.()
       hooks.stop()
       // Terminals first: every PTY and its whole process tree is killed before the sockets and the database go away.
       await terminals?.shutdown().catch((err: unknown) => log.warn('terminal shutdown failed', { error: err instanceof Error ? err.message : 'unknown' }))

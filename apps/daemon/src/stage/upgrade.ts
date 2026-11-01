@@ -16,6 +16,9 @@ import { wsTransport } from './transport'
  *   1. the peer address is loopback (the daemon only listens on 127.0.0.1; this is the explicit second lock);
  *   2. the path is exactly /ws/stage and the request target carries NO query string at all (a token in a URL would
  *      reach logs and history: it is refused outright, never read);
+ *   2b. the request is HTTP/1.1 (RFC 6455 asks for at least that) and carries each of Host, Origin and Authorization at
+ *      most ONCE: Node keeps the first of a duplicated header, a proxy or a library might keep the last, and a request
+ *      the two disagree about is refused instead of judged by one of them;
  *   3. Host is 127.0.0.1:PORT or localhost:PORT (DNS rebinding);
  *   4. Origin is ABSENT (an engine is not a browser) or allowlisted (the daemon's own origins and the dev origins);
  *   5. `Authorization: Bearer <stage token>`, compared in constant time. The browser session cookie is NEVER read: a
@@ -55,6 +58,20 @@ function reject(socket: Duplex, status: number, code: string): void {
 }
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+/** Headers the upgrade decision reads; sent twice, the request is ambiguous and is refused. */
+const SINGLE_HEADERS = new Set(['host', 'origin', 'authorization'])
+
+/** The first header name that appears more than once among Host, Origin and Authorization (raw headers keep every copy). */
+export function duplicatedDecisionHeader(rawHeaders: readonly string[]): string | undefined {
+  const seen = new Set<string>()
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+    const name = (rawHeaders[i] ?? '').toLowerCase()
+    if (!SINGLE_HEADERS.has(name)) continue
+    if (seen.has(name)) return name
+    seen.add(name)
+  }
+  return undefined
+}
 
 export function createStageUpgrade(deps: StageUpgradeDeps): StageUpgrade {
   const { security, hub, config, log } = deps
@@ -83,6 +100,9 @@ export function createStageUpgrade(deps: StageUpgradeDeps): StageUpgrade {
     if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) return no(403, 'not_loopback')
     // Not even an empty one: `?` anywhere in the request target is refused, so nothing can ever be read from it.
     if ((req.url ?? '').includes('?')) return no(400, 'no_query', 'a query string was sent')
+    if (req.httpVersion !== '1.1') return no(400, 'http_version', 'the upgrade was not HTTP/1.1')
+    const dup = duplicatedDecisionHeader(req.rawHeaders ?? [])
+    if (dup) return no(400, 'duplicate_header', `${dup} was sent more than once`)
 
     const verdict = security.checkStageUpgrade({
       ...(req.headers.host !== undefined ? { host: req.headers.host } : {}),

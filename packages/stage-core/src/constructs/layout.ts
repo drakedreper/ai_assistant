@@ -13,7 +13,7 @@
 import type { BrainLayer } from './layers'
 import { LAYER_ORDER } from './layers'
 import { createRng, fnv1a32 } from '../util/rng'
-import { clamp } from '../util/math'
+import { clamp, clampFinite } from '../util/math'
 
 export interface LayoutNodeInput {
   id: string
@@ -49,9 +49,10 @@ export function layoutGraph(nodes: readonly LayoutNodeInput[], edges: readonly L
   const n = sorted.length
   if (n === 0) return out
   const seed = opts.seed ?? 'constellation'
-  const iterations = clamp(Math.floor(opts.iterations ?? 120), 1, 600)
-  const R = opts.radius ?? DEFAULT_LAYOUT_RADIUS
-  const depthStep = opts.depthStep ?? DEFAULT_DEPTH_STEP
+  // options come from callers: a NaN, an Infinity or an absurd value falls back to / is clamped into a sane range
+  const iterations = clampFinite(Math.floor(opts.iterations ?? 120), 1, 600, 120)
+  const R = clampFinite(opts.radius ?? DEFAULT_LAYOUT_RADIUS, 0.5, 100, DEFAULT_LAYOUT_RADIUS)
+  const depthStep = clampFinite(opts.depthStep ?? DEFAULT_DEPTH_STEP, 0.05, 10, DEFAULT_DEPTH_STEP)
   const maxZ = depthStep * (LAYER_ORDER.length - 1) + 0.6
 
   const index = new Map<string, number>()

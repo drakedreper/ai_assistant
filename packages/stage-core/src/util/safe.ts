@@ -31,9 +31,26 @@ export function hasForbiddenKeys(value: unknown, depth = 6): boolean {
 export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/
 export const isSafeId = (id: unknown): id is string => typeof id === 'string' && SAFE_ID.test(id) && !FORBIDDEN_KEYS.has(id)
 
-/** Strip control characters and collapse whitespace; used for display names and memory text. */
+/**
+ * Clean one line of display text (names, preset names, memory text). Tabs, newlines and other line breaks become a space (a
+ * name cannot start a second log line); control characters, invisible format characters (zero-width characters, bidi marks
+ * and overrides, the BOM, soft hyphens), line and paragraph separators and lone surrogates are removed; whitespace is
+ * collapsed and trimmed; the cut to `maxLen` UTF-16 units never splits a surrogate pair. Never throws.
+ */
 export function cleanText(input: string, maxLen: number): string {
-  // eslint-disable-next-line no-control-regex
-  const stripped = input.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
-  return stripped.replace(/[ \t]+/g, ' ').trim().slice(0, maxLen)
+  if (typeof input !== 'string') return ''
+  const oneLine = input.replace(/[\t\n\r\u000b\u000c\u0085\u2028\u2029]+/g, ' ')
+  const stripped = oneLine.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/gu, '')
+  const collapsed = stripped.replace(/\s+/g, ' ').trim()
+  return truncateUnits(collapsed, maxLen)
+}
+
+/** Cut to at most `max` UTF-16 units without leaving half of a surrogate pair at the end. */
+export function truncateUnits(s: string, max: number): string {
+  const n = Number.isFinite(max) ? Math.max(0, Math.floor(max)) : s.length
+  if (s.length <= n) return s
+  let end = n
+  const last = end > 0 ? s.charCodeAt(end - 1) : 0
+  if (last >= 0xd800 && last <= 0xdbff) end-- // the cut would split a pair
+  return s.slice(0, end).trim()
 }

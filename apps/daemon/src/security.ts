@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 
@@ -12,9 +12,16 @@ import { z } from 'zod'
  *    does nothing on any browser route. It is never printed (the banner only says where to find it).
  *  - exchange code: single use, short lived, printed once at startup; swapped at POST /api/auth/exchange for
  *    an opaque session cookie (HttpOnly, SameSite=Strict). Only a SHA-256 of each session token is stored.
+ *  - terminal proof: a second secret, per run and never persisted, that the terminal routes require besides the cookie
+ *    (header X-Terminal-Proof). A cookie is scoped to the HOST, not the port, so another local server the user browses to
+ *    (127.0.0.1:3000) receives it; the proof is never in a cookie: it travels in the FRAGMENT of the printed sign-in link,
+ *    which no server ever sees, and the page keeps it in its own origin's storage (which no other port can read).
  *
  * Secrets live in dataDir/secrets.json (mode 0600 where the OS honours it). On Windows that file is protected
  * only by the user profile ACLs; Windows Credential Manager (@napi-rs/keyring) is the planned upgrade.
+ *
+ * The data directory itself is private on POSIX: created 0700 (and tightened to 0700 when it is demonstrably ours), the
+ * database files 0600 (see ensurePrivateDir and hardenDbFiles below).
  */
 
 /** Constant-time string comparison: both sides are hashed to equal-length digests first. */
@@ -25,7 +32,50 @@ export function safeEqual(a: string, b: string): boolean {
 }
 
 const sha256hex = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex')
+/** How many plaintext session tokens of this run are kept in memory for log masking. */
+const MAX_ISSUED_LITERALS = 40
 export const newToken = (bytes = 32) => randomBytes(bytes).toString('base64url')
+
+// ---------------------------------------------------------------- private data directory (POSIX)
+
+const chmodQuiet = (path: string, mode: number): void => {
+  try {
+    chmodSync(path, mode)
+  } catch {
+    /* best effort: a file system that has no modes (FAT, some network shares) */
+  }
+}
+
+/**
+ * Create `dir` (and missing parents) so that only the owner can enter it, where the OS honours modes (not Windows, whose
+ * profile ACLs apply instead). A directory that already exists is tightened to 0700 only when it is demonstrably this
+ * product's own data folder (it holds secrets.json or the database) or was just created here: pointing DATA_DIR at some other,
+ * shared folder never changes ITS permissions (the files in it are 0600 either way).
+ */
+export function ensurePrivateDir(dir: string, platform: NodeJS.Platform = process.platform): void {
+  const existed = existsSync(dir)
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  if (platform === 'win32') return
+  const ours = !existed || existsSync(join(dir, 'secrets.json')) || existsSync(join(dir, 'app.db')) || existsSync(join(dir, 'demo.db'))
+  if (ours) chmodQuiet(dir, 0o700)
+}
+
+/** Create an empty file with mode 0600 if there is none (SQLite then gives its -wal and -shm files the same mode). */
+export function ensurePrivateFile(file: string, platform: NodeJS.Platform = process.platform): void {
+  if (file === ':memory:' || existsSync(file)) return
+  try {
+    closeSync(openSync(file, 'a', 0o600))
+  } catch {
+    /* the store creates it with default modes then, and hardenDbFiles tightens it */
+  }
+  if (platform !== 'win32') chmodQuiet(file, 0o600)
+}
+
+/** The database and its SQLite side files: owner read and write only (POSIX). */
+export function hardenDbFiles(dbFile: string, platform: NodeJS.Platform = process.platform): void {
+  if (dbFile === ':memory:' || platform === 'win32') return
+  for (const suffix of ['', '-wal', '-shm', '-journal']) if (existsSync(`${dbFile}${suffix}`)) chmodQuiet(`${dbFile}${suffix}`, 0o600)
+}
 
 // ---------------------------------------------------------------- secrets file
 
@@ -140,8 +190,28 @@ export interface Security {
   clearCookieHeader(): string
   parseSessionCookie(cookieHeader: string | undefined): string | undefined
   validateSession(token: string | undefined): boolean
-  revokeAllSessions(): void
+  /** The key a session is known by (tickets and sockets are bound to it): the SHA-256 hex of the session token. */
+  sessionKey(token: string): string
+  /** Is the session with this key still valid (neither revoked nor expired)? */
+  validateSessionKey(key: string): boolean
+  /** Sign this one session out (POST /api/auth/signout). False when it was not a valid session. */
+  revokeSession(token: string | undefined): boolean
+  /** Sign every browser out (signout everywhere, the revoke command). Returns how many sessions there were. */
+  revokeAllSessions(): number
+  /** Called after sessions were revoked here or by the command line: close what they opened. Returns an unsubscribe. */
+  onSessionsRevoked(listener: () => void): () => void
+  /**
+   * Every secret value the daemon holds right now, for the logger to mask by exact match: the hook and stage tokens, the
+   * pending exchange code and the session tokens this process issued (kept in memory only, never written anywhere).
+   */
+  secretLiterals(): string[]
+  /** Is this the daemon's own origin (an absent Origin counts: browsers omit it on same-origin GETs)? Dev origins are not. */
+  isOwnOrigin(origin: string | undefined): boolean
   verifyHookToken(authorization: string | undefined): boolean
+  /** The terminal proof of this run (see above). Printed only inside the sign-in link's fragment; never logged, never in a response. */
+  terminalProof(): string
+  /** Constant-time check of a presented X-Terminal-Proof header. */
+  verifyTerminalProof(presented: string | undefined): boolean
   checkHost(host: string | undefined): Verdict
   /** `required` is true for non-GET requests on browser routes and for WebSocket upgrades. */
   checkOrigin(origin: string | undefined, required: boolean): Verdict
@@ -167,15 +237,22 @@ export function createSecurity(opts: SecurityOptions): Security {
   let port = opts.port
 
   let secrets: SecretsFile = persist ? loadOrCreateSecrets(opts.dataDir) : { version: 1, hookToken: newToken(32), sessions: [] }
-  let secretsMtime = persist ? mtimeOf(opts.dataDir) : 0
+  let secretsMtime = persist ? mtimeOf(opts.dataDir) : ''
   let active: { code: string; expiresAt: number } | null = null
   let failures: number[] = []
+  /** The terminal proof: random per run, held in memory only. */
+  const proof = newToken(32)
+  /** Plaintext session tokens this process issued (memory only): so the logger can mask them. Bounded. */
+  const issued: string[] = []
+  const revokedListeners = new Set<() => void>()
 
-  function mtimeOf(dir: string): number {
+  /** A stamp of the secrets file that changes with every rewrite: every write is a rename, so the inode changes even where mtime is coarse. */
+  function mtimeOf(dir: string): string {
     try {
-      return statSync(secretsPath(dir)).mtimeMs
+      const st = statSync(secretsPath(dir))
+      return `${st.mtimeMs}:${st.ino}:${st.size}`
     } catch {
-      return 0
+      return ''
     }
   }
 
@@ -185,14 +262,31 @@ export function createSecurity(opts: SecurityOptions): Security {
     secretsMtime = mtimeOf(opts.dataDir)
   }
 
-  /** Pick up a hook or stage token rotated by a CLI while the daemon is running (one stat per hook or stage request). */
-  function refreshHookToken(): void {
+  /**
+   * Pick up what a CLI changed in secrets.json while the daemon runs (one stat per request that needs a secret): a rotated
+   * hook or stage token, and sessions revoked by `revoke`. Sessions that disappeared are announced, so their sockets close.
+   * Every method that rewrites the file calls this first, so a revocation made from the command line is never written over.
+   */
+  function refreshFromDisk(): void {
     if (!persist) return
     const m = mtimeOf(opts.dataDir)
     if (m === secretsMtime) return
     secretsMtime = m
     const fresh = readSecretsFile(opts.dataDir)
-    if (fresh) secrets = { ...secrets, hookToken: fresh.hookToken, ...(fresh.stageToken ? { stageToken: fresh.stageToken } : {}) }
+    if (!fresh) return
+    const had = secrets.sessions.map((x) => x.hash)
+    secrets = { ...secrets, hookToken: fresh.hookToken, ...(fresh.stageToken ? { stageToken: fresh.stageToken } : {}), sessions: fresh.sessions }
+    if (had.some((h) => !fresh.sessions.some((x) => x.hash === h))) notifyRevoked()
+  }
+
+  function notifyRevoked(): void {
+    for (const l of [...revokedListeners]) {
+      try {
+        l()
+      } catch {
+        /* a listener must not stop the others */
+      }
+    }
   }
 
   /** The stage token always exists once the security core is built (see below). */
@@ -220,10 +314,11 @@ export function createSecurity(opts: SecurityOptions): Security {
     allowedOrigins: () => [...ownOrigins(), ...opts.devOrigins],
     cookieName,
     hookToken() {
-      refreshHookToken()
+      refreshFromDisk()
       return secrets.hookToken
     },
     rotateHookToken() {
+      refreshFromDisk()
       secrets = { ...secrets, hookToken: newToken(32) }
       save()
       return secrets.hookToken
@@ -236,20 +331,27 @@ export function createSecurity(opts: SecurityOptions): Security {
 
     exchange(code) {
       const t = now()
+      refreshFromDisk()
       failures = failures.filter((f) => t - f < windowMs)
-      if (failures.length >= maxFailed) {
-        const oldest = failures[0] ?? t
-        return { ok: false, reason: 'rate_limited', retryAfterSec: Math.max(1, Math.ceil((windowMs - (t - oldest)) / 1000)) }
-      }
-      // Compare even when there is no active code so timing does not reveal whether one exists.
+      // The code is compared FIRST, always, in constant time (a dummy when none is pending, so timing says nothing about
+      // whether one exists). The limiter only ever judges WRONG codes: a correct one succeeds even while it is tripped,
+      // so someone who merely hammers the endpoint cannot keep the owner from signing in. (Guessing a 256-bit code is not
+      // what the limiter is for; it keeps a flood of wrong guesses cheap and quiet.)
       const candidate = active && active.expiresAt > t ? active.code : newToken(32)
       const match = safeEqual(code, candidate) && active !== null && active.expiresAt > t
       if (!match) {
+        if (failures.length >= maxFailed) {
+          const oldest = failures[0] ?? t
+          return { ok: false, reason: 'rate_limited', retryAfterSec: Math.max(1, Math.ceil((windowMs - (t - oldest)) / 1000)) }
+        }
         failures.push(t)
         return { ok: false, reason: 'invalid' }
       }
       active = null // single use
+      failures = []
       const token = newToken(32)
+      issued.push(token)
+      if (issued.length > MAX_ISSUED_LITERALS) issued.shift()
       pruneSessions()
       const sessions = [...secrets.sessions, { hash: sha256hex(token), createdAt: t, expiresAt: t + opts.sessionTtlMs }]
       secrets = { ...secrets, sessions: sessions.slice(-20) }
@@ -276,32 +378,68 @@ export function createSecurity(opts: SecurityOptions): Security {
     },
     validateSession(token) {
       if (!token) return false
-      const h = sha256hex(token)
+      return security.validateSessionKey(sha256hex(token))
+    },
+    sessionKey: sha256hex,
+    validateSessionKey(key) {
+      refreshFromDisk()
       const t = now()
       let valid = false
       // Walk every stored session with a constant-time compare; no early exit.
       for (const s of secrets.sessions) {
-        const same = safeEqual(h, s.hash)
+        const same = safeEqual(key, s.hash)
         if (same && s.expiresAt > t) valid = true
       }
       return valid
     },
+    revokeSession(token) {
+      refreshFromDisk()
+      if (!token) return false
+      const h = sha256hex(token)
+      const before = secrets.sessions.length
+      secrets = { ...secrets, sessions: secrets.sessions.filter((s) => !safeEqual(h, s.hash)) }
+      const removed = before - secrets.sessions.length
+      if (removed > 0) {
+        save()
+        notifyRevoked()
+      }
+      return removed > 0
+    },
     revokeAllSessions() {
+      refreshFromDisk()
+      const n = secrets.sessions.length
       secrets = { ...secrets, sessions: [] }
       save()
+      issued.length = 0
+      notifyRevoked()
+      return n
+    },
+    onSessionsRevoked(listener) {
+      revokedListeners.add(listener)
+      return () => void revokedListeners.delete(listener)
+    },
+    secretLiterals() {
+      refreshFromDisk()
+      return [secrets.hookToken, currentStageToken(), proof, ...(active ? [active.code] : []), ...issued].filter((v) => v.length > 0)
+    },
+    isOwnOrigin(origin) {
+      if (origin === undefined || origin === '') return true
+      const o = origin.trim().toLowerCase()
+      return ownOrigins().some((a) => a.toLowerCase() === o)
     },
 
     stageToken() {
-      refreshHookToken()
+      refreshFromDisk()
       return currentStageToken()
     },
     rotateStageToken() {
+      refreshFromDisk()
       secrets = { ...secrets, stageToken: newToken(32) }
       save()
       return currentStageToken()
     },
     verifyStageToken(authorization) {
-      refreshHookToken()
+      refreshFromDisk()
       const m = /^Bearer\s+(\S+)$/i.exec(authorization ?? '')
       const presented = m?.[1] ?? ''
       const expected = currentStageToken()
@@ -310,8 +448,15 @@ export function createSecurity(opts: SecurityOptions): Security {
       return same && presented.length > 0 && expected.length > 0
     },
 
+    terminalProof: () => proof,
+    verifyTerminalProof(presented) {
+      // Compare even when nothing was presented, so timing says nothing; an empty header never matches.
+      const same = safeEqual(presented ?? '', proof)
+      return same && typeof presented === 'string' && presented.length > 0
+    },
+
     verifyHookToken(authorization) {
-      refreshHookToken()
+      refreshFromDisk()
       const m = /^Bearer\s+(\S+)$/i.exec(authorization ?? '')
       const presented = m?.[1] ?? ''
       const same = safeEqual(presented, secrets.hookToken)

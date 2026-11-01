@@ -227,3 +227,5 @@ What the user must do for tests on their PC: connect it through Remote Control (
 The long-term interface is the cerebral space described in [CEREBRAL-SPACE.md](CEREBRAL-SPACE.md): an empty void where the user's representation and the second brain live, with the knowledge graph, Claude sessions and an interactive terminal as objects in it.
 
 Decision (2026-10-31): Windows and GPU testing runs through Claude Code on the user's own PC, using [PC-BRINGUP.md](PC-BRINGUP.md) and `spikes/pc/KICKOFF-PROMPT.md`. The cloud session cannot reach that machine.
+
+Progress (2026-11-01): Phase 1 and the first half of Phase 2 are built. The terminal (Phase 1.5) and the stage backend (Phase 2a) are done and reviewed adversarially ([review record](reviews/2026-11-01-terminal-and-stage.md)). Next: the integrations hub (Desktop Commander, Google, Secondbrain), the Windows and GPU bring-up on the user's PC, then the engine reference stage once the references and the engine decision are in.

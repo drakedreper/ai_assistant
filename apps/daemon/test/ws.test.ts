@@ -332,7 +332,8 @@ describe('WebSocket limits and shutdown', () => {
     open.push(d)
     const info = await d.daemon.start()
     expect(d.lane.state).toBe('ready')
-    expect(info.exchangeUrl).toBe(`http://127.0.0.1:${info.port}/?code=${info.code}`)
+    // the terminal pairing proof rides in the fragment of the link (no server ever sees a fragment)
+    expect(info.exchangeUrl).toBe(`http://127.0.0.1:${info.port}/?code=${info.code}#tp=${d.daemon.security.terminalProof()}`)
     expect(info.code.length).toBeGreaterThanOrEqual(32)
     // The port in the allowlist follows the real port.
     expect(d.daemon.security.allowedHosts()).toContain(`127.0.0.1:${info.port}`)

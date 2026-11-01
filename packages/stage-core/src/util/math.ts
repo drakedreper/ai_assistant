@@ -2,9 +2,12 @@ export const isFiniteNumber = (v: unknown): v is number => typeof v === 'number'
 
 export const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v)
 
-/** Clamp that also repairs NaN/Infinity (NaN becomes `fallback`, +-Infinity clamp to the ends). */
+/**
+ * Clamp that also repairs what is not a usable number: NaN AND anything that is not a number at all (a string, null, an
+ * object, a Symbol) become `fallback`; +-Infinity clamp to the ends. Never throws, whatever it is given.
+ */
 export function clampFinite(v: number, lo: number, hi: number, fallback = 0): number {
-  if (Number.isNaN(v)) return clamp(fallback, lo, hi)
+  if (typeof v !== 'number' || Number.isNaN(v)) return clamp(fallback, lo, hi)
   return clamp(v, lo, hi)
 }
 

@@ -1,14 +1,16 @@
 import { AUTHORITY_PRESENCE, CharacterProfile, PresenceStyle, VoiceProfile } from '@ai-assistant/shared'
 import type { Asset, Equipped, OutfitPreset, RigFamily, WardrobeSlot } from '@ai-assistant/shared'
 import type { AssetCatalog } from '../assets/catalog'
+import type { AssetManifest } from '../assets/manifest'
 import type { CharacterRepo, CharacterRole } from './repo'
-import { evaluateAdultEnvelope } from './adult-policy'
+import { ADULT_BOUNDS, evaluateAdultEnvelope, governedAliasOf } from './adult-policy'
 import { defaultParams, scalarsOf, validateParams } from './params'
 import type { ParamSet } from './params'
 import { ALL_SLOTS, equippedAssetIds, normalizeEquipped } from '../core/equipped'
-import { baselineEquipped, completeBaseline, validateEquipped } from '../wardrobe/slots'
+import { baselineEquipped, completeBaseline, coverageProblem, validateEquipped } from '../wardrobe/slots'
 import { SEED_OUTFIT_PRESETS } from '../wardrobe/presets'
 import { cleanText, isSafeId } from '../util/safe'
+import { clampFinite } from '../util/math'
 import { fail, ok } from '../util/result'
 import type { Result } from '../util/result'
 import type { Clock } from '../util/clock'
@@ -70,12 +72,22 @@ export interface UpdateCharacterInput {
 export interface RestoreReport {
   assistant?: CharacterProfile
   user?: CharacterProfile
-  /** Slots cleared because their asset vanished, no longer fits, or its licence now forbids it. */
+  /** Slots cleared (and saved) because their asset vanished, no longer fits, no longer covers, or its licence now forbids it. */
   repaired: Array<{ characterId: string; slot: WardrobeSlot; assetId: string; reason: string }>
   /** Parameters that were out of range for the (possibly updated) base and were clamped, or dropped. */
   paramsAdjusted: Array<{ characterId: string; ids: string[] }>
-  /** Characters whose clothed baseline could not be restored from this catalog. */
+  /**
+   * Characters that could NOT be made safe from this catalog (no usable base, parameters the adult envelope cannot accept,
+   * no way to re-establish the clothed baseline). Such a character is NOT changed in a way that would hide the problem
+   * and is NOT described to a stage (`loadCommand` refuses it) until the catalog can make her whole again.
+   */
   problems: Array<{ characterId: string; message: string }>
+}
+
+/** A reason a character may not be shown on a stage, with the code `loadCommand` answers with. */
+export interface CharacterProblem {
+  code: CharacterCode
+  message: string
 }
 
 export interface CharacterServiceDeps {
@@ -101,7 +113,7 @@ export class CharacterService {
     return ok(structuredClone(parsed.data))
   }
 
-  private baseOf(profile: Pick<CharacterProfile, 'baseAssetId'>): Asset | undefined {
+  private baseOf(profile: Pick<CharacterProfile, 'baseAssetId'>): AssetManifest | undefined {
     return this.deps.catalog.get(profile.baseAssetId)
   }
 
@@ -253,6 +265,8 @@ export class CharacterService {
   setParams(id: string, patch: Record<string, number | string>, blendMs = 0): Result<{ profile: CharacterProfile; changed: string[]; command?: CommandDraft }, CharacterCode> {
     const cur = this.deps.repo.get(id)
     if (!cur) return fail('not_found', `character "${id}" does not exist`)
+    // the blend time goes to the stage: NaN means "now", anything else is held to 0..5000 ms (REST already says so)
+    const blend = clampFinite(typeof blendMs === 'number' ? blendMs : 0, 0, 5000, 0)
     const r = this.resolveParams(cur, patch)
     if (!r.ok) return r
     const changed = Object.keys(r.value).filter((k) => cur.params[k] !== r.value[k])
@@ -261,7 +275,7 @@ export class CharacterService {
     if (changed.length === 0) return ok({ profile: saved.value, changed })
     const send: Record<string, number | string> = {}
     for (const k of changed) send[k] = r.value[k]!
-    return ok({ profile: saved.value, changed, command: { type: 'character.params', characterId: id, params: send, blendMs } })
+    return ok({ profile: saved.value, changed, command: { type: 'character.params', characterId: id, params: send, blendMs: blend } })
   }
 
   /**
@@ -308,27 +322,88 @@ export class CharacterService {
     return out
   }
 
-  /** The `character.load` command for a character. */
-  loadCommand(id: string): Result<CommandDraft, CharacterCode> {
+  /**
+   * Everything that stops this character from being shown on a stage right now (empty = she may be shown). It FAILS
+   * CLOSED: the base must exist, be a character base with a personal-use licence and the adult attestation; the stored
+   * parameters must be valid for it and acceptable to the adult envelope as a whole; and what she wears must be a valid
+   * clothed state in the current catalog (every item exists, fits, is licensed, covers what its slot must cover).
+   * The resolved parameter set (what a stage may be told) comes with it.
+   */
+  assess(profile: CharacterProfile): { problems: CharacterProblem[]; params?: ParamSet } {
+    const { catalog } = this.deps
+    const problems: CharacterProblem[] = []
+    const base = this.baseOf(profile)
+    let params: ParamSet | undefined
+    if (!base) {
+      problems.push({ code: 'base_unusable', message: `base asset "${profile.baseAssetId}" is not in the catalog` })
+    } else {
+      if (base.kind !== 'character_base') problems.push({ code: 'base_unusable', message: `"${base.name}" is a ${base.kind}, not a character base` })
+      const lic = catalog.canUse(base.id, 'personal')
+      if (!lic.ok) problems.push({ code: 'base_unusable', message: lic.reasons.join('; ') })
+      if (base.adult !== true) problems.push({ code: 'base_unusable', message: `"${base.name}" is not attested as an adult character base` })
+      if (!base.rigFamilies.includes(profile.rigFamily)) problems.push({ code: 'base_unusable', message: `"${base.name}" does not use a ${profile.rigFamily} rig` })
+      const pv = validateParams(base, {}, profile.params)
+      if (!pv.ok) problems.push({ code: 'invalid_params', message: pv.errors.join('; ') })
+      else {
+        params = pv.params
+        const env = evaluateAdultEnvelope(scalarsOf(pv.params))
+        if (!env.ok) problems.push({ code: 'adult_envelope', message: env.violations.join('; ') })
+      }
+    }
+    const issues = validateEquipped(normalizeEquipped(profile.equipped), catalog, profile.rigFamily)
+    if (issues.length > 0) problems.push({ code: 'invalid_equipped', message: issues.map((i) => i.message).join('; ') })
+    return { problems, ...(params ? { params } : {}) }
+  }
+
+  /** `ok` when the character may be shown on a stage, else the first reason (see `assess` for all of them). */
+  check(id: string): Result<true, CharacterCode> {
     const c = this.deps.repo.get(id)
     if (!c) return fail('not_found', `character "${id}" does not exist`)
-    return ok({ type: 'character.load', characterId: c.id, character: c, assets: this.assetsFor(c) })
+    const { problems } = this.assess(c)
+    return problems.length === 0 ? ok(true) : fail(problems[0]!.code, problems.map((p) => p.message).join('; '))
   }
 
   /**
-   * Called on daemon start: make persisted state safe again. Equipped items whose asset vanished, no longer fit, or
-   * whose licence changed are cleared; the clothed baseline is refilled; parameters are re-clamped against the current
-   * base manifest; exactly one active assistant is guaranteed whenever an assistant exists.
+   * The `character.load` command for a character. It is a GATE: a character whose base is missing or unlicensed, whose
+   * parameters the adult envelope would not accept, or who is not validly clothed in the current catalog gets a refusal
+   * and no command, so a stage never receives such a figure. What is sent is the RESOLVED parameter set (the base's
+   * defaults with the stored values clamped in), never stale or unknown ids.
+   */
+  loadCommand(id: string): Result<CommandDraft, CharacterCode> {
+    const c = this.deps.repo.get(id)
+    if (!c) return fail('not_found', `character "${id}" does not exist`)
+    const { problems, params } = this.assess(c)
+    if (problems.length > 0 || !params) return fail(problems[0]?.code ?? 'base_unusable', problems.map((p) => p.message).join('; ') || 'the character cannot be shown')
+    const shown: CharacterProfile = { ...c, params }
+    return ok({ type: 'character.load', characterId: c.id, character: shown, assets: this.assetsFor(shown) })
+  }
+
+  /**
+   * Called on daemon start: make persisted state safe again, and FAIL CLOSED where it cannot.
+   *
+   * Repaired and saved: equipped items whose asset vanished, no longer fit, no longer cover what their slot must cover,
+   * or whose licence changed are cleared and the clothed baseline is refilled from the VETTED baseline picks; parameters
+   * are re-clamped against the current base manifest; stored parameters the adult envelope rejects are reset to the
+   * base's defaults (when those are acceptable themselves).
+   *
+   * Never "repaired" into something worse: if the clothed baseline cannot be re-established from this catalog, NOTHING
+   * about what she wears is saved (an unclothed state is never persisted, and a temporarily missing asset does not
+   * destroy her wardrobe: she is whole again when it returns). If her base is missing, unlicensed or not an adult base, or
+   * her parameters cannot be made acceptable, the character is reported in `problems` and `loadCommand` refuses to
+   * describe her to a stage. If the active character of a role cannot be shown and another one can, the other becomes the
+   * active one (reported too). Exactly one active assistant is guaranteed whenever an assistant exists.
    */
   restore(): RestoreReport {
     const { repo, catalog } = this.deps
     const report: RestoreReport = { repaired: [], paramsAdjusted: [], problems: [] }
+    const problem = (characterId: string, message: string): void => void report.problems.push({ characterId, message })
     for (const c of repo.list()) {
       let changed = false
       const next: CharacterProfile = structuredClone(c)
 
-      // equipped
+      // ---- what she wears
       const eq = normalizeEquipped(c.equipped)
+      const repairs: RestoreReport['repaired'] = []
       for (const slot of ALL_SLOTS) {
         const aid = eq[slot]
         if (!aid) continue
@@ -340,30 +415,50 @@ export class CharacterService {
         else {
           const lic = catalog.canUse(aid, 'personal')
           if (!lic.ok) reason = lic.reasons.join('; ')
+          else reason = coverageProblem(a, slot)
         }
         if (reason) {
-          report.repaired.push({ characterId: c.id, slot, assetId: aid, reason })
+          repairs.push({ characterId: c.id, slot, assetId: aid, reason })
           // clear every slot that item occupied so a half-worn multi-slot item cannot survive
           for (const s of ALL_SLOTS) if (eq[s] === aid) eq[s] = null
-          changed = true
         }
       }
+      let mixed = false
       if (eq.fullBody && (eq.top || eq.bottom)) {
         eq.top = null
         eq.bottom = null
-        changed = true
+        mixed = true
       }
       const completed = completeBaseline(eq, catalog, c.rigFamily)
-      if (!completed) report.problems.push({ characterId: c.id, message: 'the clothed baseline could not be restored from this catalog' })
-      else if (completed.filled.length > 0) {
-        Object.assign(eq, completed.equipped)
-        changed = true
+      if (!completed) {
+        // fail closed: keep what is stored (never an unclothed state) and say so; loadCommand will refuse her
+        problem(c.id, 'the clothed baseline could not be restored from this catalog (no vetted top and bottom are left to refill it); her look is kept as stored and she is not shown until it can be')
+      } else {
+        report.repaired.push(...repairs)
+        if (repairs.length > 0 || completed.filled.length > 0 || mixed) {
+          next.equipped = completed.equipped
+          changed = true
+        }
       }
-      next.equipped = eq
 
-      // params against the current base
+      // ---- her base and her parameters
       const base = this.baseOf(c)
-      if (base) {
+      if (!base) {
+        problem(c.id, `base asset "${c.baseAssetId}" is not in the catalog, so she cannot be shown`)
+        // Without a base there is nothing to re-judge the parameters against, but the adult envelope still applies to what is
+        // stored: a governed value that violates it (or that is not even a number), or a combination that is too youthful, is
+        // REMOVED, so nothing out of the envelope stays in her record. Her base sets those values again when it returns.
+        const governed = Object.keys(c.params).filter((k) => Object.prototype.hasOwnProperty.call(ADULT_BOUNDS, k) || governedAliasOf(k) !== undefined)
+        const env = evaluateAdultEnvelope(scalarsOf(c.params))
+        if (!env.ok || governed.some((k) => typeof c.params[k] !== 'number')) {
+          next.params = Object.fromEntries(Object.entries(c.params).filter(([k]) => !governed.includes(k)))
+          changed = true
+          problem(c.id, `stored parameters violated the adult envelope (${env.violations.join('; ') || 'a governed value was not a number'}); the governed values were cleared and are set from her base again when it returns`)
+        }
+      } else {
+        const lic = catalog.canUse(base.id, 'personal')
+        if (!lic.ok) problem(c.id, `her base "${base.name}" can no longer be used: ${lic.reasons.join('; ')}`)
+        if (base.kind !== 'character_base' || base.adult !== true) problem(c.id, `her base "${base.name}" is not an adult character base`)
         const defs = new Map(base.params.map((p) => [p.id, p]))
         const adjusted: string[] = []
         for (const k of Object.keys(c.params)) if (!defs.has(k)) adjusted.push(k)
@@ -377,26 +472,38 @@ export class CharacterService {
           }
           const env = evaluateAdultEnvelope(scalarsOf(next.params))
           if (!env.ok) {
-            // an updated base can never reach here with in-range values; if it does, fall back to the base defaults
-            next.params = defaultParams(base)
-            changed = true
-            report.problems.push({ characterId: c.id, message: `stored parameters violated the adult envelope and were reset to the base defaults (${env.violations.join('; ')})` })
+            // an updated base can never reach here with in-range values; if it does, fall back to the base defaults, if THEY are acceptable
+            const defaults = defaultParams(base)
+            if (evaluateAdultEnvelope(scalarsOf(defaults)).ok) {
+              next.params = defaults
+              changed = true
+              problem(c.id, `stored parameters violated the adult envelope and were reset to the base defaults (${env.violations.join('; ')})`)
+            } else {
+              problem(c.id, `stored parameters violate the adult envelope and the base defaults do not satisfy it either (${env.violations.join('; ')}); she is not shown`)
+            }
           }
+        } else {
+          problem(c.id, `stored parameters are not valid for her base (${pv.errors.join('; ')}); she is not shown`)
         }
-      } else {
-        report.problems.push({ characterId: c.id, message: `base asset "${c.baseAssetId}" is not in the catalog` })
       }
       if (changed) {
         next.updatedAt = this.nowIso()
         const parsed = CharacterProfile.safeParse(next)
         if (parsed.success) repo.save(parsed.data)
+        else problem(c.id, 'the repaired character could not be saved')
       }
     }
 
-    // exactly one active assistant (and at most one user) pointing at a real character of the right role
+    // exactly one active assistant (and at most one user) pointing at a real character of the right role, preferring one that can be shown
+    const usable = (p: CharacterProfile): boolean => this.assess(p).problems.length === 0
     for (const role of ['assistant', 'user'] as const) {
       const active = this.getActive(role)
-      if (!active) repo.setActiveId(role, this.list(role)[0]?.id)
+      if (active && usable(active)) continue
+      const alt = this.list(role).find(usable)
+      if (alt && alt.id !== active?.id) {
+        repo.setActiveId(role, alt.id)
+        if (active) problem(active.id, `${active.name} cannot be shown, so ${alt.name} is now the active ${role}`)
+      } else if (!active) repo.setActiveId(role, this.list(role)[0]?.id)
     }
     const a = this.getActive('assistant')
     const u = this.getActive('user')

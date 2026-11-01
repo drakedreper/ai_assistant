@@ -419,7 +419,10 @@ describe('virtual audio playback', () => {
     r.pair.backend.sendBinary(encodeFaceFrame(id, startAt, new Array(104).fill(0.1)))
     expect(r.sim.utterance(id)!.faceFrames).toBe(2)
     expect((await r.send({ type: 'perform.speak', utteranceId: id, text: 'x', emotion: 'neutral', audio: { format: 'pcm_s16le', sampleRate: 24000, channels: 1 }, faceSource: 'stage' })).reason).toMatch(/already active/)
-    expect((await r.send({ type: 'perform.speak', utteranceId: 'z', text: 'x', emotion: 'neutral', audio: { format: 'pcm_s16le', sampleRate: 100, channels: 1 }, faceSource: 'stage' })).reason).toMatch(/sample rate/)
+    // an absurd rate is refused by the shared schema before it is sent (the contract bounds it to 8 kHz .. 192 kHz) ...
+    expect((await r.send({ type: 'perform.speak', utteranceId: 'z', text: 'x', emotion: 'neutral', audio: { format: 'pcm_s16le', sampleRate: 100, channels: 1 }, faceSource: 'stage' })).reason).toMatch(/sample ?rate/i)
+    // ... and one the schema allows but this stage cannot play (above 96 kHz) is refused by the stage itself
+    expect((await r.send({ type: 'perform.speak', utteranceId: 'z', text: 'x', emotion: 'neutral', audio: { format: 'pcm_s16le', sampleRate: 150_000, channels: 1 }, faceSource: 'stage' })).reason).toMatch(/unsupported sample rate/)
     expect((await r.send({ type: 'perform.speak', utteranceId: 'z', text: 'x', emotion: 'neutral', audio: { format: 'pcm_s16le', sampleRate: 24000, channels: 1, totalMs: -5 }, faceSource: 'stage' })).reason).toMatch(/totalMs/)
   })
   it('rejects undecodable binary frames and counts frames of unknown utterances; can record every frame', async () => {

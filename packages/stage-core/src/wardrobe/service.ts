@@ -3,11 +3,18 @@
  * the guaranteed clothed baseline. Cosmetic changes only.
  *
  * The baseline is stricter than "top and bottom not both empty": every committed state has a full-body item or BOTH a
- * top and a bottom. Equipping may auto-complete a displaced slot from the rig's baseline pick (`autoFill`, default
- * on); unequipping never does, it is refused instead.
+ * top and a bottom, and what sits in those slots must really cover the body (the top the torso, the bottom the legs, a
+ * full-body item both; see wardrobe/slots.ts). Equipping may auto-complete a displaced slot from the rig's VETTED baseline
+ * pick (`autoFill`, default on); unequipping never does, it is refused instead.
+ *
+ * Preset tweaks (colour and fit overrides keyed by asset id and parameter id) are validated like any other input: the
+ * shape first (a null inner value is refused, not a crash), then against the declared parameters of the pieces worn, and
+ * never for a parameter the adult envelope governs. They are checked again when a preset is applied, so a stored preset
+ * that was edited by hand cannot send the stage anything the checks would have refused.
  */
 import type { Asset, BodyRegion, CharacterProfile, Equipped, OutfitPreset, WardrobeSlot as Slot } from '@ai-assistant/shared'
 import { OutfitPreset as OutfitPresetSchema } from '@ai-assistant/shared'
+import { ADULT_BOUNDS, governedAliasOf } from '../characters/adult-policy'
 import type { AssetManifest } from '../assets/manifest'
 import type { AssetCatalog } from '../assets/catalog'
 import type { CharacterService } from '../characters/service'
@@ -229,7 +236,38 @@ export class WardrobeService {
     const c = this.deps.characters.get(characterId)
     if (!c) return [`character "${characterId}" does not exist`]
     const target = applyPresetToEquipped(c.equipped, preset)
-    return validateEquipped(target, this.deps.catalog, c.rigFamily).map((i) => i.message)
+    const out = validateEquipped(target, this.deps.catalog, c.rigFamily).map((i) => i.message)
+    const tw = this.checkTweaks(preset.tweaks, new Set(equippedAssetIds(target)))
+    if (!tw.ok) out.push(tw.error)
+    return out
+  }
+
+  /**
+   * Validate preset tweaks (asset id -> parameter id -> value): the shape, then each value against the declared parameter of
+   * a piece that is worn. Returns the cleaned tweaks (values clamped into range, colours as "#rrggbb"). Never throws.
+   */
+  private checkTweaks(tweaks: unknown, worn: ReadonlySet<string>): Result<OutfitPreset['tweaks'], WardrobeCode> {
+    if (hasForbiddenKeys(tweaks)) return fail('invalid_input', 'tweaks contain a forbidden key')
+    const shape = OutfitPresetSchema.shape.tweaks.safeParse(tweaks)
+    if (!shape.success) return fail('invalid_input', 'tweaks must map an asset id to { parameter id: a number or "#rrggbb" }')
+    const cleaned: OutfitPreset['tweaks'] = {}
+    for (const [assetId, values] of Object.entries(shape.data)) {
+      if (!worn.has(assetId)) return fail('invalid_input', `tweaks refer to "${assetId}", which is not part of the look`)
+      const asset = this.deps.catalog.get(assetId)
+      if (!asset) return fail('invalid_input', `tweaks refer to "${assetId}", which is not in the catalog`)
+      const defs = new Map(asset.params.map((p) => [p.id, p]))
+      const out: Record<string, number | string> = {}
+      for (const [pid, v] of Object.entries(values)) {
+        if (Object.prototype.hasOwnProperty.call(ADULT_BOUNDS, pid) || governedAliasOf(pid)) return fail('invalid_input', `"${pid}" is governed by the adult envelope and cannot be tweaked`)
+        const d = defs.get(pid)
+        if (!d) return fail('invalid_input', `"${asset.name}" has no parameter "${pid}"`)
+        const r = validateParamValue(d, v)
+        if (!r.ok) return fail('invalid_input', r.error)
+        out[pid] = r.value
+      }
+      cleaned[assetId] = out
+    }
+    return ok(cleaned)
   }
 
   /** Presets that can be worn right now by this character. */
@@ -264,24 +302,10 @@ export class WardrobeService {
       let n = 2
       while (c.value.presets.some((p) => p.id === id)) id = `preset.${slug}-${n++}`
     }
-    const tweaks = opts.tweaks ?? {}
-    if (hasForbiddenKeys(tweaks)) return fail('invalid_input', 'tweaks contain a forbidden key')
-    const worn = new Set(equippedAssetIds(c.value.equipped))
-    const cleanTweaks: OutfitPreset['tweaks'] = {}
-    for (const [assetId, values] of Object.entries(tweaks)) {
-      if (!worn.has(assetId)) return fail('invalid_input', `tweaks refer to "${assetId}", which is not part of the look`)
-      const asset = this.deps.catalog.get(assetId)!
-      const defs = new Map(asset.params.map((p) => [p.id, p]))
-      const out: Record<string, number | string> = {}
-      for (const [pid, v] of Object.entries(values)) {
-        const d = defs.get(pid)
-        if (!d) return fail('invalid_input', `"${asset.name}" has no parameter "${pid}"`)
-        const r = validateParamValue(d, v)
-        if (!r.ok) return fail('invalid_input', r.error)
-        out[pid] = r.value
-      }
-      cleanTweaks[assetId] = out
-    }
+    // only an ABSENT tweaks argument means "none": null, an array or a string is refused like any other malformed value
+    const checked = this.checkTweaks(opts.tweaks === undefined ? {} : opts.tweaks, new Set(equippedAssetIds(c.value.equipped)))
+    if (!checked.ok) return checked
+    const cleanTweaks = checked.value
     const parsed = OutfitPresetSchema.safeParse({ id, name: clean, equipped: normalizeEquipped(c.value.equipped), tweaks: cleanTweaks, context: opts.context ?? {} })
     if (!parsed.success) return fail('invalid_input', parsed.error.issues[0]?.message ?? 'invalid preset')
     const presets = existing ? c.value.presets.map((p) => (p.id === id ? parsed.data : p)) : [...c.value.presets, parsed.data]
@@ -299,7 +323,10 @@ export class WardrobeService {
     const target = applyPresetToEquipped(c.value.equipped, preset)
     const issues = validateEquipped(target, this.deps.catalog, c.value.rigFamily)
     if (issues.length > 0) return fail('invalid_preset', `preset "${preset.name}" cannot be worn: ${issues.map((i) => i.message).join('; ')}`)
-    return this.commit(c.value, target, { source: opts.source ?? 'user', presetId: preset.id, presetTweaks: preset.tweaks, asOutfit: true })
+    // a stored preset is not trusted either: its tweaks go through the same checks as when it was saved
+    const tweaks = this.checkTweaks(preset.tweaks, new Set(equippedAssetIds(target)))
+    if (!tweaks.ok) return fail('invalid_preset', `preset "${preset.name}" cannot be worn: ${tweaks.error}`)
+    return this.commit(c.value, target, { source: opts.source ?? 'user', presetId: preset.id, presetTweaks: tweaks.value, asOutfit: true })
   }
 
   deletePreset(characterId: string, presetId: string): Result<true, WardrobeCode> {

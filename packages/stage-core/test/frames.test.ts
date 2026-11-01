@@ -231,3 +231,53 @@ describe('encoder errors are programmer mistakes and throw FrameEncodeError', ()
     expect(fn).toThrow(FrameEncodeError)
   })
 })
+
+describe('the encoder and the decoder accept exactly the same values (LOW: frames-face-weights-range, frames-encoder-decoder-time-asymmetry)', () => {
+  const faceBytes = (weights: number[]): Uint8Array => {
+    const payload = new Uint8Array(weights.length * 4)
+    const v = new DataView(payload.buffer)
+    weights.forEach((w, i) => v.setFloat32(i * 4, w, true))
+    return header(2, 7, 0, payload)
+  }
+  const frame = (w: number): number[] => [w, ...new Array(51).fill(0.5)]
+
+  it('the decoder refuses a face weight outside 0..1, whatever else is in the frame', () => {
+    for (const w of [3.4e38, -3.4e38, 7, -0.0001, 1.0000001, 2, -1e-3, 100]) {
+      expect(decodeFrame(faceBytes(frame(w))), `weight ${w}`).toEqual({ ok: false, error: 'weight_range' })
+    }
+    for (const w of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) expect(decodeFrame(faceBytes(frame(w)))).toEqual({ ok: false, error: 'non_finite' })
+    // the ends and the denormals are inside the range
+    for (const w of [0, 1, 0.5, 1e-45, 0.9999999, -0]) expect(decodeFrame(faceBytes(frame(w))).ok, `weight ${w}`).toBe(true)
+  })
+  it('a weight outside the range anywhere in a multi-frame message is found', () => {
+    const w = new Array(52 * 3).fill(0.2)
+    w[52 * 2 + 17] = 1.5
+    expect(decodeFrame(faceBytes(w))).toEqual({ ok: false, error: 'weight_range' })
+  })
+  it('the encoder refuses what the decoder refuses (so a frame it writes can always be read back)', () => {
+    for (const w of [3.4e38, -3.4e38, 7, -0.5, 1.5]) expect(() => encodeFaceFrame('u', 0, frame(w))).toThrow(FrameEncodeError)
+    for (const w of [0, 1, 0.25]) expect(decodeFrame(encodeFaceFrame('u', 0, frame(w))).ok).toBe(true)
+  })
+  it('a start time above 2^53-1 is refused by the encoder as the decoder refuses it', () => {
+    for (const t of [1e300, 2 ** 53, Number.MAX_VALUE, Number.POSITIVE_INFINITY]) {
+      expect(() => encodeAudioFrame('x', t, new Uint8Array(2)), `t=${t}`).toThrow(FrameEncodeError)
+      expect(decodeFrame(header(1, 1, t)).ok).toBe(false)
+    }
+    for (const t of [0, 1, 1.8e12, Number.MAX_SAFE_INTEGER]) {
+      const e = encodeAudioFrame('x', t, new Uint8Array(2))
+      const d = decodeFrame(e)
+      expect(d.ok && d.frame.tStartMs, `t=${t}`).toBe(t)
+    }
+  })
+  it('property: every frame the encoder produces decodes, and every decoded face weight is within 0..1', () => {
+    const r = lcg(99)
+    for (let i = 0; i < 2000; i++) {
+      const k = 1 + Math.floor(r() * 3)
+      const w = Array.from({ length: 52 * k }, () => r())
+      const t = Math.floor(r() * 1e13)
+      const d = decodeFrame(encodeFaceFrame(`u${i}`, t, w))
+      expect(d.ok).toBe(true)
+      if (d.ok) for (const f of faceFrames(d.frame.payload)) expect([...f].every((x) => x >= 0 && x <= 1)).toBe(true)
+    }
+  })
+})

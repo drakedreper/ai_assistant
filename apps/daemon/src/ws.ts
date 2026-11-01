@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer } from 'ws'
-import type { WsHello } from '@ai-assistant/shared'
+import type { ServerEvent, WsHello } from '@ai-assistant/shared'
 import { DaemonRoutes } from '@ai-assistant/shared'
 import type { EventBus } from './bus'
 import type { Logger } from './log'
@@ -71,6 +71,8 @@ export class ClientPump {
 export interface WsHub {
   clientCount(): number
   stats(): { accepted: number; rejected: number; droppedSlow: number }
+  /** Close (4401) every client whose session is no longer valid (signed out, revoked from the command line). */
+  dropRevoked(): number
   close(): Promise<void>
 }
 
@@ -90,11 +92,18 @@ export function attachWebSocket(opts: {
   hello: () => { backend: 'fake' | 'sdk'; version: string }
   options: WsOptions
   log: Logger
+  /**
+   * Shape an event for ONE client before it is sent. `ownOrigin` is false for a page served from a dev origin (the Vite dev
+   * server): it is allowed to read the feed, but not the details of the embedded terminals (src/app.ts hides them).
+   */
+  transform?: (event: ServerEvent, ownOrigin: boolean) => ServerEvent
 }): WsHub {
   const { server, bus, security, log } = opts
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false })
   const stats = { accepted: 0, rejected: 0, droppedSlow: 0 }
   const alive = new WeakMap<object, boolean>()
+  /** Who each socket is: the session it signed in with (a hash, never the cookie). */
+  const owners = new WeakMap<object, { sessionKey: string | undefined }>()
 
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
     socket.on('error', () => {})
@@ -134,10 +143,14 @@ export function attachWebSocket(opts: {
     }
     const since = sinceRaw === null ? undefined : Number(sinceRaw)
     const epoch = url.searchParams.get('epoch') ?? undefined
+    const cookieValue = security.parseSessionCookie(req.headers.cookie)
+    const sessionKey = cookieValue ? security.sessionKey(cookieValue) : undefined
+    const ownOrigin = security.isOwnOrigin(req.headers.origin)
 
     wss.handleUpgrade(req, socket, head, (ws) => {
       stats.accepted++
       alive.set(ws, true)
+      owners.set(ws, { sessionKey })
       const pump = new ClientPump(ws, opts.options.maxBufferedBytes, (reason) => {
         if (reason === 'slow_consumer') stats.droppedSlow++
         log.warn('dropped websocket client', { reason })
@@ -145,8 +158,9 @@ export function attachWebSocket(opts: {
 
       // Everything below is synchronous, so no event can be published between planning the replay and subscribing.
       const plan = bus.planReplay(since, epoch)
+      const shape = (event: ServerEvent): ServerEvent => (opts.transform ? opts.transform(event, ownOrigin) : event)
       const unsubscribe = bus.subscribe((event) => {
-        pump.send(event)
+        pump.send(shape(event))
       })
       const hello: DaemonHello = {
         type: 'hello',
@@ -158,7 +172,7 @@ export function attachWebSocket(opts: {
         ...(plan.kind === 'resync' ? { reason: plan.reason } : {}),
       }
       pump.send(hello)
-      if (plan.kind === 'replay') for (const e of plan.events) pump.send(e)
+      if (plan.kind === 'replay') for (const e of plan.events) pump.send(shape(e))
 
       ws.on('pong', () => alive.set(ws, true))
       ws.on('message', (data, isBinary) => {
@@ -180,7 +194,27 @@ export function attachWebSocket(opts: {
 
   server.on('upgrade', onUpgrade)
 
+  /** Close the sockets of sessions that are no longer valid (4401: the client must sign in again). */
+  const dropRevoked = (): number => {
+    let n = 0
+    for (const ws of wss.clients) {
+      const key = owners.get(ws)?.sessionKey
+      if (key !== undefined && security.validateSessionKey(key)) continue
+      n++
+      try {
+        ws.close(4401, 'signed out')
+      } catch {
+        ws.terminate()
+      }
+      const t = setTimeout(() => ws.terminate(), 1000)
+      t.unref()
+    }
+    return n
+  }
+
   const heartbeat = setInterval(() => {
+    // A session revoked from the command line is noticed here at the latest (the file is re-read on the next check).
+    dropRevoked()
     for (const ws of wss.clients) {
       if (alive.get(ws) === false) {
         ws.terminate()
@@ -199,6 +233,7 @@ export function attachWebSocket(opts: {
   return {
     clientCount: () => wss.clients.size,
     stats: () => ({ ...stats }),
+    dropRevoked,
     async close() {
       clearInterval(heartbeat)
       server.off('upgrade', onUpgrade)

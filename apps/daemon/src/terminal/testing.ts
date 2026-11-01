@@ -98,6 +98,9 @@ export class FakeKiller implements TreeKiller {
   readonly terminated: number[] = []
   readonly forced: number[] = []
   readonly forcedSync: number[] = []
+  readonly reaped: Array<{ pid: number; graceMs: number }> = []
+  /** What reap() reports as still running (pids that could not be ended). */
+  survivors: number[] = []
   constructor(private readonly ptys: () => FakePty[] = () => [], private readonly exitOn: 'terminate' | 'force' | 'never' = 'terminate') {}
   async terminate(pid: number): Promise<void> {
     this.terminated.push(pid)
@@ -109,6 +112,10 @@ export class FakeKiller implements TreeKiller {
   }
   forceKillSync(pid: number): void {
     this.forcedSync.push(pid)
+  }
+  async reap(pid: number, graceMs: number): Promise<number[]> {
+    this.reaped.push({ pid, graceMs })
+    return [...this.survivors]
   }
 }
 

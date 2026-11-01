@@ -11,7 +11,9 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
  *   - short lived (about 30 s);
  *   - bound to ONE terminal and to the browser session (the SHA-256 of the session cookie) that asked for it.
  * Comparison walks every pending ticket with timingSafeEqual and never exits early.
- * Failed presentations are rate limited so a local process cannot grind on the socket.
+ * Failed presentations are rate limited PER BROWSER SESSION (the presenter's, which is known: the cookie was checked
+ * before the upgrade), so one session that misbehaves, or a buggy client loop, locks out only itself and never another
+ * session. A ticket that merely expired is not a failure: a slow client is not an attacker.
  */
 
 export interface TicketBinding {
@@ -38,6 +40,8 @@ export interface TicketStoreOptions {
   failureWindowMs?: number
 }
 
+const MAX_TRACKED_SESSIONS = 256
+
 const sha256 = (s: string): Buffer => createHash('sha256').update(s, 'utf8').digest()
 
 /** The binding key for a session cookie value. */
@@ -45,7 +49,8 @@ export const sessionKeyOf = (cookieValue: string): string => createHash('sha256'
 
 export class TicketStore {
   private pending: Pending[] = []
-  private failures: number[] = []
+  /** Failed presentations per presenting session (a hash): the timestamps inside the window. */
+  private failures = new Map<string, number[]>()
   private readonly maxPending: number
   private readonly maxFailures: number
   private readonly failureWindowMs: number
@@ -67,8 +72,19 @@ export class TicketStore {
 
   redeem(ticket: string, binding: TicketBinding): RedeemResult {
     const t = this.opts.now()
-    this.failures = this.failures.filter((f) => t - f < this.failureWindowMs)
-    if (this.failures.length >= this.maxFailures) return { ok: false, reason: 'rate_limited' }
+    const key = binding.sessionKey
+    const recent = (this.failures.get(key) ?? []).filter((f) => t - f < this.failureWindowMs)
+    if (recent.length > 0) this.failures.set(key, recent)
+    else this.failures.delete(key)
+    if (recent.length >= this.maxFailures) return { ok: false, reason: 'rate_limited' }
+    const fail = (reason: 'invalid' | 'wrong_terminal' | 'wrong_session'): RedeemResult => {
+      const list = this.failures.get(key) ?? []
+      list.push(t)
+      this.failures.set(key, list)
+      // Sessions are few (the daemon keeps at most 20), but never let a pathological caller grow this without bound.
+      while (this.failures.size > MAX_TRACKED_SESSIONS) this.failures.delete(this.failures.keys().next().value as string)
+      return { ok: false, reason }
+    }
 
     const presented = sha256(typeof ticket === 'string' ? ticket : '')
     let hit = -1
@@ -76,26 +92,14 @@ export class TicketStore {
       const p = this.pending[i] as Pending
       if (timingSafeEqual(presented, p.hash) && hit === -1) hit = i
     }
-    if (hit === -1) {
-      this.failures.push(t)
-      return { ok: false, reason: 'invalid' }
-    }
+    if (hit === -1) return fail('invalid')
     const [entry] = this.pending.splice(hit, 1) as [Pending] // consumed, whatever happens next
-    if (entry.expiresAt <= t) {
-      this.failures.push(t)
-      return { ok: false, reason: 'expired' }
-    }
-    if (entry.terminalId !== binding.terminalId) {
-      this.failures.push(t)
-      return { ok: false, reason: 'wrong_terminal' }
-    }
+    if (entry.expiresAt <= t) return { ok: false, reason: 'expired' } // not counted: a slow client is not an attacker
+    if (entry.terminalId !== binding.terminalId) return fail('wrong_terminal')
     // Both are hex digests of equal length, compared in constant time.
     const a = Buffer.from(entry.sessionKey, 'utf8')
     const b = Buffer.from(binding.sessionKey, 'utf8')
-    if (a.length !== b.length || !timingSafeEqual(a, b)) {
-      this.failures.push(t)
-      return { ok: false, reason: 'wrong_session' }
-    }
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return fail('wrong_session')
     return { ok: true }
   }
 

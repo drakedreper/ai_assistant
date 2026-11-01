@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import WebSocket from 'ws'
 import { TerminalServerMessage } from '@ai-assistant/shared'
 import { makeTerminalHarness, rawHttp, type TerminalHarness } from './terminalHarness'
@@ -444,5 +444,168 @@ describe('slow consumers and shutdown', () => {
     expect(h.killer.terminated).toContain(pid)
     const closed = await c.closed
     expect([1000, 1001]).toContain(closed.code)
+  })
+})
+
+
+// ---------------------------------------------------------------- the review's flood findings
+
+describe('control frames and text frames are bounded (CONTROL-FRAME-BACKPRESSURE, TEXT-FRAMES-NOT-RATE-LIMITED)', () => {
+  const pauseReading = (c: Conn) => (c.ws as unknown as { _socket: { pause(): void } })._socket.pause()
+
+  it('a client that floods valid text frames and never reads is DROPPED once its queue passes the bound, not fed forever', async () => {
+    // the text-frame budget is raised out of the way so the queue bound is what is under test
+    const h = await live({ limits: { maxBufferedBytes: 8 * 1024, textFrameBurst: 1e9, textFramesPerSec: 1e9 } })
+    const { id } = await h.create()
+    const c = await authed(h, id)
+    pauseReading(c)
+    // Every valid extra auth frame is answered with an error reply, and the replies pile up behind a client that does not
+    // read. Loopback buffers a few MiB in the kernel, so (like the reviewers' own flood) the frames are written pre-framed and
+    // in bulk until the daemon's own queue for this socket has passed the bound.
+    const sock = (c.ws as unknown as { _socket: NodeJS.WritableStream & { destroyed: boolean; on(e: string, f: () => void): void } })._socket
+    sock.on('error', () => undefined)
+    const body = Buffer.from(authFrame('x'))
+    const frame = Buffer.concat([Buffer.from([0x81, 0x80 | body.length, 0, 0, 0, 0]), body]) // a masked text frame (zero mask)
+    const chunk = Buffer.concat(Array.from({ length: 25_000 }, () => frame))
+    for (let i = 0; i < 60 && !sock.destroyed && h.daemon.terminals.upgrade.stats().droppedSlow === 0; i++) {
+      sock.write(chunk)
+      await new Promise((r) => setTimeout(r, 25))
+    }
+    const deadline = Date.now() + 4000
+    while (h.daemon.terminals.upgrade.stats().droppedSlow === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
+    expect(h.daemon.terminals.upgrade.stats().droppedSlow).toBeGreaterThan(0)
+    expect(h.daemon.terminals.service.isAttached(id)).toBe(false)
+    expect(h.daemon.terminals.service.get(id)).toMatchObject({ state: 'running' }) // the terminal itself is untouched
+  })
+
+  it('text frames have a budget: a flood of resizes closes the socket with 4429, the terminal keeps running', async () => {
+    const h = await live()
+    const { id } = await h.create()
+    const c = await authed(h, id)
+    for (let i = 0; i < 400; i++) c.ws.send(JSON.stringify({ type: 'resize', cols: 80 + (i % 2), rows: 24 }))
+    expect(await c.closed).toMatchObject({ code: 4429 })
+    expect(h.daemon.terminals.service.get(id)).toMatchObject({ state: 'running' })
+    // a client behaving like a person (a drag-resize is dozens of frames a second at worst) is not touched
+    const again = await authed(h, id)
+    for (let i = 0; i < 60; i++) again.ws.send(JSON.stringify({ type: 'resize', cols: 80 + (i % 5), rows: 24 }))
+    await new Promise((r) => setTimeout(r, 100))
+    expect(again.ws.readyState).toBe(WebSocket.OPEN)
+    expect(h.fake.last().resizes.length).toBeGreaterThan(5)
+  })
+
+  it('the text budget refills with time (the daemon\'s clock), so a long session never runs dry', async () => {
+    const h = await live()
+    const { id } = await h.create()
+    const c = await authed(h, id)
+    for (let i = 0; i < 90; i++) c.ws.send(JSON.stringify({ type: 'resize', cols: 80 + (i % 3), rows: 24 }))
+    await new Promise((r) => setTimeout(r, 60))
+    h.clock.advance(5000) // 250 tokens worth of time: the bucket is full again
+    for (let i = 0; i < 90; i++) c.ws.send(JSON.stringify({ type: 'resize', cols: 90 + (i % 3), rows: 24 }))
+    await new Promise((r) => setTimeout(r, 60))
+    expect(c.ws.readyState).toBe(WebSocket.OPEN)
+  })
+
+  it('a flood of keystroke frames the bucket drops is answered with ONE notice a second, not one reply per frame', async () => {
+    const h = await live({ limits: { inputBurstBytes: 1024, inputBytesPerSec: 1 } })
+    const { id } = await h.create()
+    const c = await authed(h, id)
+    for (let i = 0; i < 500; i++) c.ws.send(Buffer.alloc(100, 0x61))
+    await new Promise((r) => setTimeout(r, 200))
+    const notices = () => c.text.filter((m) => m.type === 'error' && m.message === 'input_rate_limited').length
+    expect(notices()).toBe(1)
+    h.clock.advance(1500) // a second later the client is told again (the bucket has refilled a little, then runs dry again)
+    for (let i = 0; i < 200; i++) c.ws.send(Buffer.alloc(300, 0x61))
+    await new Promise((r) => setTimeout(r, 200))
+    expect(notices()).toBe(2)
+    expect(c.ws.readyState).toBe(WebSocket.OPEN)
+  })
+
+  it('a socket that is being closed for flooding is closed ONCE: the frames that still arrive are ignored, not answered with a timer each', async () => {
+    const h = await live()
+    const { id } = await h.create()
+    const c = await authed(h, id)
+    pauseReading(c) // a flooder that never answers the closing handshake
+    const closeCalls = vi.spyOn(WebSocket.prototype, 'close')
+    try {
+      const sock = (c.ws as unknown as { _socket: NodeJS.WritableStream & { destroyed: boolean; on(e: string, f: () => void): void } })._socket
+      sock.on('error', () => undefined)
+      const body = Buffer.from(JSON.stringify({ type: 'resize', cols: 80, rows: 24 }))
+      const frame = Buffer.concat([Buffer.from([0x81, 0x80 | body.length, 0, 0, 0, 0]), body])
+      sock.write(Buffer.concat(Array.from({ length: 5000 }, () => frame)))
+      await new Promise((r) => setTimeout(r, 400))
+      // the server closed the socket for the first over-budget frame and looked at nothing after that (before: once per frame)
+      expect(closeCalls.mock.calls.length).toBeLessThanOrEqual(3)
+    } finally {
+      closeCalls.mockRestore()
+    }
+    // and it is cut off after the grace period even though the peer never answered
+    const deadline = Date.now() + 5000
+    while (h.daemon.terminals.upgrade.socketCount() > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+    expect(h.daemon.terminals.upgrade.socketCount()).toBe(0)
+    expect(h.daemon.terminals.service.get(id)).toMatchObject({ state: 'running' })
+  })
+
+  it('a client that keeps flooding after it was told to slow down is cut off (4429)', async () => {
+    const h = await live({ limits: { inputBurstBytes: 1024, inputBytesPerSec: 1, maxDroppedInputFrames: 50 } })
+    const { id } = await h.create()
+    const c = await authed(h, id)
+    for (let i = 0; i < 300; i++) c.ws.send(Buffer.alloc(100, 0x61))
+    expect(await c.closed).toMatchObject({ code: 4429 })
+    expect(h.daemon.terminals.service.get(id)).toMatchObject({ state: 'running' })
+  })
+
+  it('a big paste (sent as 8 KiB frames) is dropped with a notice, but never gets the socket cut off', async () => {
+    const h = await live()
+    const { id } = await h.create()
+    const c = await authed(h, id)
+    // 3 MiB in 8 KiB frames: more than the 1 MiB burst, far fewer dropped frames than the abuse threshold
+    for (let i = 0; i < 384; i++) c.ws.send(Buffer.alloc(8 * 1024, 0x61))
+    await new Promise((r) => setTimeout(r, 300))
+    expect(c.ws.readyState).toBe(WebSocket.OPEN)
+    expect(c.text.some((m) => m.type === 'error' && m.message === 'input_rate_limited')).toBe(true)
+  })
+})
+
+describe('the failed-ticket limit is per browser session (TICKET-FAILURE-LIMIT-GLOBAL)', () => {
+  async function secondSession(h: TerminalHarness): Promise<string> {
+    const { code } = h.daemon.security.issueExchangeCode()
+    const ex = await rawHttp(h.port, 'POST', '/api/auth/exchange', { code }, { Origin: h.origin })
+    return String(ex.headers['set-cookie']?.[0] ?? '').split(';')[0] ?? ''
+  }
+
+  it('one session that fails 20 times locks only itself out: another session\'s valid ticket still works', async () => {
+    const h = await live()
+    const { id } = await h.create()
+    const bCookie = await secondSession(h)
+    for (let i = 0; i < 22; i++) {
+      const c = await connect(h, id, { Origin: h.origin, Cookie: bCookie })
+      c.ws.send(authFrame(`wrong-${i}`))
+      await c.closed
+    }
+    // session A, whose ticket is perfectly good, is not collateral damage
+    const a = await authed(h, id)
+    expect(a.text[0]).toMatchObject({ type: 'ready' })
+    a.ws.close()
+    await a.closed
+    // and B really is limited now: even a valid ticket for B is refused
+    const bTicket = ((await (await h.call(`/api/terminals/${id}/ticket`, { method: 'POST', cookie: bCookie })).json()) as { ticket: string }).ticket
+    const b = await connect(h, id, { Origin: h.origin, Cookie: bCookie })
+    b.ws.send(authFrame(bTicket))
+    expect(await b.closed).toMatchObject({ code: 4401 })
+    expect(h.daemon.terminals.service.isAttached(id)).toBe(false)
+  })
+
+  it('an expired ticket is not counted as a failure (a slow client is not an attacker)', async () => {
+    const h = await live()
+    const { id } = await h.create()
+    for (let i = 0; i < 25; i++) {
+      const t = await h.ticket(id)
+      h.clock.advance(31_000) // past the 30 s lifetime
+      const c = await connect(h, id)
+      c.ws.send(authFrame(t))
+      expect(await c.closed).toMatchObject({ code: 4401 })
+    }
+    const ok = await authed(h, id) // 25 expired presentations later the same session still gets in
+    expect(ok.text[0]).toMatchObject({ type: 'ready' })
   })
 })

@@ -69,16 +69,27 @@ export interface CatalogLoadReport {
   rejected: Array<{ id: string; reason: string }>
 }
 
-/** Fill the in-memory catalog from the stored entries. A stored manifest is validated again, so a bad row is reported and skipped. */
+/** The ids of the entries this build ships. Vetting comes from the code, never from what a database row says about itself. */
+export function seedIds(): ReadonlySet<string> {
+  return new Set(seedManifests().map((m) => (m as { id: string }).id))
+}
+
+const idOfManifest = (m: unknown): string => (typeof m === 'object' && m !== null && typeof (m as { id?: unknown }).id === 'string' ? (m as { id: string }).id : '(unknown)')
+
+/**
+ * Fill the in-memory catalog from the stored entries. A stored manifest is validated again, so a bad row is reported and
+ * skipped. An entry is VETTED (it may be picked as the default clothed baseline, and it is exempt from the extra rules an
+ * unknown asset must meet) only when it came from the seed AND its id is one this build ships: a catalog entry a user
+ * registered through the REST route stays unvetted after a restart, whatever its tags say.
+ */
 export function loadCatalog(catalog: AssetCatalog, stageStore: StageStore): CatalogLoadReport {
   const report: CatalogLoadReport = { loaded: 0, rejected: [] }
+  const shipped = seedIds()
   for (const row of stageStore.listAssets()) {
-    const r = catalog.add(row.manifest, { replace: true })
+    const vetted = row.source === 'seed' && shipped.has(idOfManifest(row.manifest))
+    const r = catalog.add(row.manifest, { replace: true, vetted })
     if (r.ok) report.loaded++
-    else {
-      const id = typeof row.manifest === 'object' && row.manifest !== null && typeof (row.manifest as { id?: unknown }).id === 'string' ? (row.manifest as { id: string }).id : '(unknown)'
-      report.rejected.push({ id, reason: r.error })
-    }
+    else report.rejected.push({ id: idOfManifest(row.manifest), reason: r.error })
   }
   return report
 }
@@ -105,7 +116,8 @@ export function runSeed(d: SeedDeps): SeedReport {
 
   for (const manifest of seedManifests()) {
     if (d.stageStore.hasAsset((manifest as { id: string }).id)) continue
-    const r = d.catalog.add(manifest, { replace: true })
+    // the seed is the project's own metadata: vetted (see loadCatalog)
+    const r = d.catalog.add(manifest, { replace: true, vetted: true })
     if (!r.ok) {
       report.problems.push(`asset ${(manifest as { id: string }).id}: ${r.error}`)
       continue

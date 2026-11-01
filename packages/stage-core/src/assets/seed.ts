@@ -254,5 +254,6 @@ export function seedBaseId(rig: RigFamily, key: 'composed' | 'poised' = 'compose
 
 /** A catalog preloaded with the seed entries. Throws if a seed entry is invalid (a bug in this file, covered by tests). */
 export function createSeedCatalog(options: AssetCatalogOptions = {}): AssetCatalog {
-  return createAssetCatalog(options, SEED_ASSETS as unknown as AssetManifestInput[])
+  // the seed is first-party metadata: the owner of the catalog vouches for it (it may supply the default clothed baseline)
+  return createAssetCatalog(options, SEED_ASSETS as unknown as AssetManifestInput[], { vetted: true })
 }

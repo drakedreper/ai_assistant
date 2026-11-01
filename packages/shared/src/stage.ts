@@ -17,6 +17,95 @@ import { Emotion } from './schemas/common'
 export const STAGE_PROTOCOL = 'mira-stage/1' as const
 
 // ---------------------------------------------------------------------------------------------------------------
+// Bounds (additive hardening: nothing here renames or retypes a field, it only refuses absurd values)
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * A stage clock is milliseconds on the stage's OWN clock: since its process started, or since the Unix epoch (about
+ * 1.8e12 today). Below 0 or above 2^50 ms (about 35,000 years) it is a broken clock: it would put audio and face frames
+ * outside what the binary frame header can carry and park timers for ever, so it is refused.
+ */
+export const STAGE_CLOCK_MAX_MS = 2 ** 50
+
+/** Per-command limits of `scene.data` (the same ceilings as the construct state a stage keeps: 5000 nodes, 20000 edges, 5000 items). */
+export const SCENE_DATA_LIMITS = { nodes: 5000, edges: 20_000, items: 5000 } as const
+
+/** What an open-ended record field (scene.data items, a construct query) may carry. All of it travels as JSON text. */
+export const BOUNDED_JSON_LIMITS = {
+  /** Levels of nesting below the record itself. A circular structure runs into this. */
+  maxDepth: 6,
+  /** Values (every string, number, boolean, null, object and array counts as one). */
+  maxNodes: 512,
+  maxString: 4096,
+  maxKey: 128,
+  maxArray: 1024,
+  /** |number| at most this. */
+  maxAbs: Number.MAX_SAFE_INTEGER,
+} as const
+
+export type BoundedJsonLimits = { [K in keyof typeof BOUNDED_JSON_LIMITS]: number }
+
+/**
+ * True when `value` is plain JSON of bounded size: objects (plain or null-prototype) and arrays of finite numbers,
+ * strings, booleans and null. Refused: NaN, Infinity, BigInt, undefined inside an array, functions, symbols, Dates,
+ * Maps and other class instances, accessors and symbol keys (a getter or `toJSON` could throw or change between the
+ * check and the send), a `__proto__` key, circular or very deep structures, huge arrays and strings.
+ * Never throws (a Proxy that throws is simply "not JSON").
+ */
+export function isBoundedJson(value: unknown, limits: Partial<BoundedJsonLimits> = {}): boolean {
+  const L: BoundedJsonLimits = { ...BOUNDED_JSON_LIMITS, ...limits }
+  let nodes = 0
+  const walk = (v: unknown, depth: number): boolean => {
+    if (++nodes > L.maxNodes) return false
+    switch (typeof v) {
+      case 'string':
+        return v.length <= L.maxString
+      case 'number':
+        return Number.isFinite(v) && Math.abs(v) <= L.maxAbs
+      case 'boolean':
+        return true
+      case 'object': {
+        if (v === null) return true
+        if (depth >= L.maxDepth) return false
+        if (Array.isArray(v)) {
+          if (Object.getPrototypeOf(v) !== Array.prototype || v.length > L.maxArray) return false
+          for (let i = 0; i < v.length; i++) {
+            const d = Object.getOwnPropertyDescriptor(v, i)
+            if (!d || !('value' in d) || !walk(d.value, depth + 1)) return false
+          }
+          return true
+        }
+        const proto = Object.getPrototypeOf(v)
+        if (proto !== Object.prototype && proto !== null) return false
+        for (const k of Reflect.ownKeys(v)) {
+          if (typeof k !== 'string' || k.length > L.maxKey || k === '__proto__') return false
+          const d = Object.getOwnPropertyDescriptor(v, k)!
+          if (!('value' in d)) return false
+          if (d.value === undefined || !d.enumerable) continue // JSON.stringify leaves these out
+          if (!walk(d.value, depth + 1)) return false
+        }
+        return true
+      }
+      default:
+        return false
+    }
+  }
+  try {
+    return walk(value, 0)
+  } catch {
+    return false
+  }
+}
+
+const JSON_RECORD_MESSAGE = 'must be plain JSON: finite numbers, strings up to 4096 characters, no BigInt, functions, class instances or cycles, at most 6 levels deep and 512 values'
+
+/** A record of plain, bounded JSON values (the type stays `Record<string, unknown>`; the refinement only refuses what cannot travel as JSON). */
+const JsonRecord = z.record(z.string(), z.unknown()).refine((v) => isBoundedJson(v), { message: JSON_RECORD_MESSAGE })
+
+/** A coordinate in metres or a quaternion component. Real scenes stay within a few hundred metres; this only stops absurd values. */
+const Coord = z.number().min(-1e6).max(1e6)
+
+// ---------------------------------------------------------------------------------------------------------------
 // Rigs and capabilities
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -35,8 +124,8 @@ export type StageEngine = z.infer<typeof StageEngine>
 /** Declared by a stage in `hello`, so the backend adapts instead of assuming (e.g. send ARKit frames or visemes). */
 export const StageCapabilities = z.object({
   engine: StageEngine,
-  engineVersion: z.string(),
-  rigFamilies: z.array(RigFamily),
+  engineVersion: z.string().max(64),
+  rigFamilies: z.array(RigFamily).max(8),
   face: z.object({
     arkit52: z.boolean(),
     visemes: z.boolean(),
@@ -53,8 +142,8 @@ export const StageCapabilities = z.object({
   /** The stage can track the user (webcam) to drive the user's avatar and report presence. Never sends images. */
   tracking: z.object({ face: z.boolean(), body: z.boolean() }).default({ face: false, body: false }),
   /** Data constructs the stage can draw in the space (see ConstructKind). */
-  constructs: z.array(z.string()).default([]),
-  maxCharacters: z.number().int().positive(),
+  constructs: z.array(z.string().max(64)).max(64).default([]),
+  maxCharacters: z.number().int().positive().max(1000),
 })
 export type StageCapabilities = z.infer<typeof StageCapabilities>
 
@@ -106,22 +195,22 @@ export type BodyRegion = z.infer<typeof BodyRegion>
  */
 export const AssetLicense = z.object({
   /** SPDX id, "vendor-eula", or "unknown". */
-  id: z.string(),
-  source: z.string().optional(),
+  id: z.string().max(128),
+  source: z.string().max(512).optional(),
   personalUse: z.boolean(),
   commercialUse: z.boolean(),
   redistribution: z.boolean(),
   /** Whether the author permits sexual/violent expression with this model (VRM flags this explicitly). */
   adultExpression: z.boolean().optional(),
-  notes: z.string().optional(),
+  notes: z.string().max(2000).optional(),
 })
 export type AssetLicense = z.infer<typeof AssetLicense>
 
 /** A morph or parameter the user can adjust (face width, eye size, bust, height...). Like a character-creator slider. */
 export const MorphParam = z.object({
-  id: z.string(),
+  id: z.string().max(64),
   group: z.enum(['face', 'eyes', 'nose', 'mouth', 'body', 'skin', 'hair', 'makeup', 'other']),
-  label: z.string(),
+  label: z.string().max(120),
   min: z.number(),
   max: z.number(),
   default: z.number(),
@@ -143,8 +232,8 @@ export const Asset = z.object({
   thumbnail: z.string().optional(),
   slots: z.array(WardrobeSlot).default([]),
   hides: z.array(BodyRegion).default([]),
-  /** Parameters this asset exposes (a base character exposes its face/body sliders; an outfit may expose fit/color). */
-  params: z.array(MorphParam).default([]),
+  /** Parameters this asset exposes (a base character exposes its face/body sliders; an outfit may expose fit/color). At most 256. */
+  params: z.array(MorphParam).max(256).default([]),
   /** Another asset id this one is a color/material variant of. */
   variantOf: z.string().optional(),
   license: AssetLicense,
@@ -173,7 +262,7 @@ export const OutfitPreset = z.object({
   name: z.string(),
   equipped: Equipped,
   /** Material/color overrides keyed by asset id then param id. */
-  tweaks: z.record(z.string(), z.record(z.string(), z.union([z.number(), z.string()]))).default({}),
+  tweaks: z.record(z.string(), z.record(z.string(), z.union([z.number(), z.string().max(64)]))).default({}),
   /** Soft context hints for the OutfitDirector. The user can always override. */
   context: z
     .object({
@@ -225,7 +314,7 @@ export const CharacterProfile = z.object({
   baseAssetId: z.string(),
   rigFamily: RigFamily,
   /** All slider/color values set by the user or the character creator: paramId -> value. */
-  params: z.record(z.string(), z.union([z.number(), z.string()])),
+  params: z.record(z.string(), z.union([z.number(), z.string().max(64)])),
   equipped: Equipped,
   presets: z.array(OutfitPreset).default([]),
   voice: VoiceProfile,
@@ -243,8 +332,8 @@ export type CharacterProfile = z.infer<typeof CharacterProfile>
 // Scene: the environment and the objects in it (VTube Studio's "items", but in 3D)
 // ---------------------------------------------------------------------------------------------------------------
 
-export const Vec3 = z.tuple([z.number(), z.number(), z.number()])
-export const Quat = z.tuple([z.number(), z.number(), z.number(), z.number()])
+export const Vec3 = z.tuple([Coord, Coord, Coord])
+export const Quat = z.tuple([Coord, Coord, Coord, Coord])
 export const Transform = z.object({ position: Vec3, rotation: Quat, scale: Vec3 })
 export type Transform = z.infer<typeof Transform>
 
@@ -290,13 +379,15 @@ export type CameraShot = z.infer<typeof CameraShot>
  */
 export const Atmosphere = z.object({
   ground: z.enum(['void', 'reflective', 'grid']).default('void'),
-  fogColor: z.string().default('#0a1a3a'),
+  fogColor: z.string().max(32).default('#0a1a3a'),
   fogDensity: z.number().min(0).max(1).default(0.55),
   /** Light shafts and soft volumetric glow. */
   volumetrics: z.boolean().default(true),
   dustMotes: z.number().min(0).max(1).default(0.35),
   /** The lit pool of floor under the character. */
-  floorPool: z.object({ radius: z.number().default(2.2), intensity: z.number().default(1), color: z.string().default('#cfe3ff') }).default({ radius: 2.2, intensity: 1, color: '#cfe3ff' }),
+  floorPool: z
+    .object({ radius: z.number().min(0).max(100).default(2.2), intensity: z.number().min(0).max(10).default(1), color: z.string().max(32).default('#cfe3ff') })
+    .default({ radius: 2.2, intensity: 1, color: '#cfe3ff' }),
   vignette: z.number().min(0).max(1).default(0.7),
   bloom: z.number().min(0).max(1).default(0.35),
 })
@@ -335,12 +426,12 @@ export const DataConstruct = z.object({
   transform: Transform,
   source: z.enum(['brain', 'work', 'life', 'money', 'world', 'terminal']),
   /** Source-specific filter, e.g. { layer: "strategy" } or { terminalId: "t1" }. */
-  query: z.record(z.string(), z.unknown()).default({}),
+  query: JsonRecord.default({}),
   style: z
     .object({
       palette: z.enum(['cool', 'warm', 'mono']).default('cool'),
       density: z.number().min(0).max(1).default(0.5),
-      scale: z.number().positive().default(1),
+      scale: z.number().positive().max(100).default(1),
     })
     .default({ palette: 'cool', density: 0.5, scale: 1 }),
   interactive: z.boolean().default(true),
@@ -348,18 +439,19 @@ export const DataConstruct = z.object({
 export type DataConstruct = z.infer<typeof DataConstruct>
 
 export const GraphNode = z.object({
-  id: z.string(),
-  label: z.string(),
+  id: z.string().min(1).max(512),
+  label: z.string().max(512),
   layer: z.enum(['core', 'strategy', 'episodic', 'semantic', 'project', 'inbox']).optional(),
   importance: z.number().int().min(1).max(5).default(2),
   /** Layout computed by the backend so every engine draws the same constellation. */
   position: Vec3.optional(),
-  color: z.string().optional(),
+  /** A "#rgb" .. "#rrggbbaa" colour (anything else, such as a script URL, is refused). */
+  color: z.string().regex(/^#[0-9a-fA-F]{3,8}$/).optional(),
   /** Visual hints derived from importance by the backend (node radius in metres, glow 0..1). Additive, optional. */
-  size: z.number().positive().optional(),
+  size: z.number().positive().max(100).optional(),
   brightness: z.number().min(0).max(1).optional(),
 })
-export const GraphEdge = z.object({ from: z.string(), to: z.string(), weight: z.number().default(1) })
+export const GraphEdge = z.object({ from: z.string().min(1).max(512), to: z.string().min(1).max(512), weight: z.number().min(0).max(1000).default(1) })
 export type GraphNode = z.infer<typeof GraphNode>
 export type GraphEdge = z.infer<typeof GraphEdge>
 
@@ -411,17 +503,17 @@ export type Posture = z.infer<typeof Posture>
 // ---------------------------------------------------------------------------------------------------------------
 
 const cmdBase = {
-  id: z.string(),
-  /** Stage-clock time the command should take effect; omitted = now. */
-  atMs: z.number().optional(),
+  id: z.string().max(128),
+  /** Stage-clock time the command should take effect; omitted = now. 0 .. 2^50 ms (see STAGE_CLOCK_MAX_MS). */
+  atMs: z.number().min(0).max(STAGE_CLOCK_MAX_MS).optional(),
   /** Which character this applies to. Omitted = the assistant character. */
-  characterId: z.string().optional(),
+  characterId: z.string().max(128).optional(),
 }
 
 export const StageCommand = z.discriminatedUnion('type', [
   // --- loading and look ---
   z.object({ ...cmdBase, type: z.literal('character.load'), character: CharacterProfile, assets: z.array(Asset) }),
-  z.object({ ...cmdBase, type: z.literal('character.params'), characterId: z.string(), params: z.record(z.string(), z.union([z.number(), z.string()])), blendMs: z.number().default(0) }),
+  z.object({ ...cmdBase, type: z.literal('character.params'), characterId: z.string(), params: z.record(z.string(), z.union([z.number(), z.string().max(64)])), blendMs: z.number().min(0).max(10_000).default(0) }),
   z.object({ ...cmdBase, type: z.literal('character.equip'), characterId: z.string(), slot: WardrobeSlot, assetId: z.string().nullable(), asset: Asset.optional() }),
   z.object({ ...cmdBase, type: z.literal('character.outfit'), characterId: z.string(), preset: OutfitPreset, assets: z.array(Asset) }),
   z.object({ ...cmdBase, type: z.literal('scene.load'), scene: Scene, assets: z.array(Asset) }),
@@ -433,24 +525,25 @@ export const StageCommand = z.discriminatedUnion('type', [
     type: z.literal('scene.data'),
     constructId: z.string(),
     mode: z.enum(['replace', 'merge']).default('merge'),
-    nodes: z.array(GraphNode).optional(),
-    edges: z.array(GraphEdge).optional(),
-    items: z.array(z.record(z.string(), z.unknown())).optional(),
+    nodes: z.array(GraphNode).max(SCENE_DATA_LIMITS.nodes).optional(),
+    edges: z.array(GraphEdge).max(SCENE_DATA_LIMITS.edges).optional(),
+    /** Plain bounded JSON per item (finite numbers, no BigInt or cycles): see isBoundedJson. */
+    items: z.array(JsonRecord).max(SCENE_DATA_LIMITS.items).optional(),
     /**
      * Removals for 'merge' mode (additive, optional): node ids (their edges go with them), edges by endpoints and item
      * ids. Lets the backend send minimal diffs instead of replacing the whole construct every tick.
      */
     remove: z
       .object({
-        nodes: z.array(z.string()).optional(),
-        edges: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
-        items: z.array(z.string()).optional(),
+        nodes: z.array(z.string()).max(SCENE_DATA_LIMITS.nodes).optional(),
+        edges: z.array(z.object({ from: z.string(), to: z.string() })).max(SCENE_DATA_LIMITS.edges).optional(),
+        items: z.array(z.string()).max(SCENE_DATA_LIMITS.items).optional(),
       })
       .optional(),
   }),
   /** Terminal bytes (ANSI) from the daemon's PTY for a terminal_pane construct. */
   z.object({ ...cmdBase, type: z.literal('construct.terminal.write'), constructId: z.string(), data: z.string() }),
-  z.object({ ...cmdBase, type: z.literal('scene.camera'), cameraId: z.string(), blendMs: z.number().default(600) }),
+  z.object({ ...cmdBase, type: z.literal('scene.camera'), cameraId: z.string(), blendMs: z.number().min(0).max(10_000).default(600) }),
   z.object({ ...cmdBase, type: z.literal('scene.lighting'), lighting: LightingPreset }),
 
   // --- live performance ---
@@ -458,17 +551,17 @@ export const StageCommand = z.discriminatedUnion('type', [
   z.object({
     ...cmdBase,
     type: z.literal('perform.speak'),
-    utteranceId: z.string(),
-    text: z.string(),
+    utteranceId: z.string().min(1).max(128),
+    text: z.string().max(4000),
     emotion: Emotion,
     /** Emotion changes inside the utterance, as offsets from its start (the tag parser's output). */
-    emotionTimeline: z.array(z.object({ tMs: z.number(), emotion: Emotion, intensity: z.number().min(0).max(1) })).default([]),
-    audio: z.object({ format: z.literal('pcm_s16le'), sampleRate: z.number(), channels: z.literal(1), totalMs: z.number().optional() }),
+    emotionTimeline: z.array(z.object({ tMs: z.number().min(0).max(3_600_000), emotion: Emotion, intensity: z.number().min(0).max(1) })).max(64).default([]),
+    audio: z.object({ format: z.literal('pcm_s16le'), sampleRate: z.number().min(8000).max(192_000), channels: z.literal(1), totalMs: z.number().min(0).max(3_600_000).optional() }),
     /** 'stage' = the stage computes the face from audio; 'backend' = FaceFrames arrive from the backend. */
     faceSource: z.enum(['stage', 'backend']),
   }),
-  z.object({ ...cmdBase, type: z.literal('perform.cancel'), utteranceId: z.string(), fadeMs: z.number().default(120) }),
-  z.object({ ...cmdBase, type: z.literal('perform.affect'), affect: Affect, blendMs: z.number().default(400) }),
+  z.object({ ...cmdBase, type: z.literal('perform.cancel'), utteranceId: z.string(), fadeMs: z.number().min(0).max(10_000).default(120) }),
+  z.object({ ...cmdBase, type: z.literal('perform.affect'), affect: Affect, blendMs: z.number().min(0).max(10_000).default(400) }),
   z.object({ ...cmdBase, type: z.literal('perform.gesture'), clip: z.string(), intensity: z.number().min(0).max(1).default(0.7), targetObjectId: z.string().optional() }),
   z.object({ ...cmdBase, type: z.literal('perform.gaze'), target: GazeTarget, speed: z.number().min(0).max(1).default(0.6), saccades: z.boolean().default(true) }),
   z.object({ ...cmdBase, type: z.literal('perform.posture'), posture: Posture, anchorObjectId: z.string().optional(), anchorId: z.string().optional() }),
@@ -482,11 +575,11 @@ export type StageCommand = z.infer<typeof StageCommand>
 // ---------------------------------------------------------------------------------------------------------------
 
 export const StageEvent = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('hello'), protocol: z.literal(STAGE_PROTOCOL), capabilities: StageCapabilities, stageClockMs: z.number() }),
-  z.object({ type: z.literal('asset.loaded'), assetId: z.string(), ms: z.number() }),
+  z.object({ type: z.literal('hello'), protocol: z.literal(STAGE_PROTOCOL), capabilities: StageCapabilities, stageClockMs: z.number().min(0).max(STAGE_CLOCK_MAX_MS) }),
+  z.object({ type: z.literal('asset.loaded'), assetId: z.string(), ms: z.number().min(0).max(3_600_000) }),
   z.object({ type: z.literal('asset.failed'), assetId: z.string(), reason: z.string() }),
-  z.object({ type: z.literal('speak.started'), utteranceId: z.string(), stageMs: z.number() }),
-  z.object({ type: z.literal('speak.ended'), utteranceId: z.string(), stageMs: z.number(), interrupted: z.boolean() }),
+  z.object({ type: z.literal('speak.started'), utteranceId: z.string(), stageMs: z.number().min(0).max(STAGE_CLOCK_MAX_MS) }),
+  z.object({ type: z.literal('speak.ended'), utteranceId: z.string(), stageMs: z.number().min(0).max(STAGE_CLOCK_MAX_MS), interrupted: z.boolean() }),
   z.object({ type: z.literal('command.done'), id: z.string() }),
   z.object({ type: z.literal('command.failed'), id: z.string(), reason: z.string() }),
   /** Presence from the camera, computed on the stage or the web UI. Never carries image data. */
@@ -497,8 +590,9 @@ export const StageEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('construct.clicked'), constructId: z.string(), itemId: z.string().optional() }),
   /** Keystrokes typed into a focused terminal_pane. The daemon forwards them to the PTY after its own checks. */
   z.object({ type: z.literal('construct.terminal.input'), constructId: z.string(), data: z.string() }),
-  z.object({ type: z.literal('construct.terminal.resize'), constructId: z.string(), cols: z.number().int(), rows: z.number().int() }),
-  z.object({ type: z.literal('perf'), fps: z.number(), gpuMs: z.number(), vramMb: z.number() }),
+  z.object({ type: z.literal('construct.terminal.resize'), constructId: z.string(), cols: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }),
+  /** Report 0 for a figure the engine cannot measure. */
+  z.object({ type: z.literal('perf'), fps: z.number().min(0).max(10_000), gpuMs: z.number().min(0).max(1_000_000), vramMb: z.number().min(0).max(10_000_000) }),
   z.object({ type: z.literal('error'), message: z.string(), fatal: z.boolean().default(false) }),
 ])
 export type StageEvent = z.infer<typeof StageEvent>

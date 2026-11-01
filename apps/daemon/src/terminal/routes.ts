@@ -9,7 +9,10 @@ import { TerminalError, type TerminalService } from './service'
  * REST routes of the embedded terminals. They are registered AFTER the global guards run, so every one of them has
  * already passed Host, Origin (required on POST and DELETE), the JSON content-type rule and the session cookie check
  * (src/http/guards.ts treats /api/terminals as a browser route). On top of that, every route except the on/off
- * switch answers 403 `terminals_disabled` until the user has switched terminals on.
+ * switch answers 403 `terminals_disabled` until the user has switched terminals on, and every route (and switching
+ * terminals ON) needs the PAIRING PROOF in the X-Terminal-Proof header (401 `terminal_proof_required`): a second secret
+ * that is not in the cookie jar, so a session cookie that leaked to another local server (cookies are scoped to the host,
+ * not the port) is not enough to mint a ticket or start a terminal. See Security.terminalProof in src/security.ts.
  */
 
 export interface TerminalRouteDeps {
@@ -23,6 +26,9 @@ export interface TerminalRouteDeps {
 }
 
 const DISABLED = 'Embedded terminals are switched off. Turn them on in Settings, Privacy.'
+export const PROOF_HEADER = 'x-terminal-proof'
+export const NOT_PAIRED =
+  'This browser is not paired with the daemon for terminals. Open the sign-in link the daemon printed when it started (the part after # is the pairing), or restart the daemon to get a new one.'
 export const FOREIGN_ORIGIN = 'Terminals can only be used from the daemon\'s own address (http://127.0.0.1:PORT or http://localhost:PORT), not from another web page or dev server.'
 
 function fail(c: Context, status: number, code: string, message: string, details?: unknown): Response {
@@ -62,7 +68,10 @@ export function registerTerminalRoutes(app: Hono, deps: TerminalRouteDeps): void
   const { service, tickets, security } = deps
   // The origin rule comes first (even for the switch), then the on/off gate.
   const foreign = (c: Context): Response | undefined => (deps.originAllowed(c.req.header('origin')) ? undefined : fail(c, 403, 'forbidden_origin', FOREIGN_ORIGIN))
-  const gated = (c: Context): Response | undefined => foreign(c) ?? (deps.enabled() ? undefined : fail(c, 403, 'terminals_disabled', DISABLED))
+  const off = (c: Context): Response | undefined => (deps.enabled() ? undefined : fail(c, 403, 'terminals_disabled', DISABLED))
+  // The proof is compared in constant time and never echoed; a missing or wrong one is the same answer.
+  const unpaired = (c: Context): Response | undefined => (security.verifyTerminalProof(c.req.header(PROOF_HEADER)) ? undefined : fail(c, 401, 'terminal_proof_required', NOT_PAIRED))
+  const gated = (c: Context): Response | undefined => foreign(c) ?? off(c) ?? unpaired(c)
 
   app.get(DaemonRoutes.terminals, (c) => gated(c) ?? c.json(service.list()))
 
@@ -109,8 +118,8 @@ export function registerTerminalRoutes(app: Hono, deps: TerminalRouteDeps): void
     return c.json(body)
   })
 
-  // A plain GET to the WebSocket path (no Upgrade) is a client mistake.
-  app.get('/ws/terminal/:id', (c) => gated(c) ?? fail(c, 426, 'upgrade_required', 'Use a WebSocket connection'))
+  // A plain GET to the WebSocket path (no Upgrade) is a client mistake. (The real upgrade needs a ticket, which needs the proof.)
+  app.get('/ws/terminal/:id', (c) => foreign(c) ?? off(c) ?? fail(c, 426, 'upgrade_required', 'Use a WebSocket connection'))
 
   // The switch itself. PUT, with POST accepted as an alias like the other settings routes.
   app.on(['PUT', 'POST'], DaemonRoutes.terminalsEnabled, async (c) => {
@@ -118,6 +127,11 @@ export function registerTerminalRoutes(app: Hono, deps: TerminalRouteDeps): void
     if (refused) return refused
     const body = await readBody(c, OnOffRequest)
     if (!body.ok) return body.res
+    // Switching terminals OFF is a safety action and needs nothing but the cookie; switching them ON is the dangerous direction.
+    if (body.data.on) {
+      const refusedProof = unpaired(c)
+      if (refusedProof) return refusedProof
+    }
     await deps.setEnabled(body.data.on)
     return c.json({ ok: true, enabled: deps.enabled() })
   })

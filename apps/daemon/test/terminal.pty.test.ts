@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
@@ -6,17 +7,18 @@ import WebSocket from 'ws'
 import { createIdGen } from '../src/ids'
 import { silentLogger } from '../src/log'
 import { nodeCwdFs } from '../src/terminal/cwd'
+import { createRealHostPtyFactory, type HostPtyFactory } from '../src/terminal/hostClient'
 import { createTreeKiller } from '../src/terminal/kill'
 import { nodeLaunchFs } from '../src/terminal/launch'
-import { createNodePtyFactory } from '../src/terminal/pty'
 import { TerminalService, type TerminalEvent } from '../src/terminal/service'
 import { RecordingSink } from '../src/terminal/testing'
 import { testConfig } from './helpers'
 import { makeTerminalHarness, type TerminalHarness } from './terminalHarness'
 
 /**
- * Real node-pty (forkpty in this Linux sandbox) with tiny node programs. Windows (ConPTY, taskkill) cannot be
- * exercised here and is covered only by the injected-collaborator unit tests.
+ * Real node-pty (forkpty in this Linux sandbox) with tiny node programs, always through a real PTY HOST process (the daemon
+ * never loads node-pty itself). Windows (ConPTY, taskkill) cannot be exercised here and is covered only by the
+ * injected-collaborator unit tests.
  */
 
 const isWin = process.platform === 'win32'
@@ -68,10 +70,41 @@ async function until<T>(cond: () => T | null | undefined | false, label: string,
   }
 }
 
+/** Pids of live (not zombie) processes whose whole command line is exactly this. Linux only. */
+function running(cmdline: string): number[] {
+  const out: number[] = []
+  for (const name of readdirSync('/proc')) {
+    if (!/^\d+$/.test(name)) continue
+    try {
+      const cmd = readFileSync(`/proc/${name}/cmdline`, 'latin1').split('\0').filter(Boolean).join(' ')
+      if (cmd !== cmdline) continue
+      const stat = readFileSync(`/proc/${name}/stat`, 'latin1')
+      const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3)
+      if (state !== 'Z' && state !== 'X') out.push(Number(name))
+    } catch {
+      /* vanished while being read */
+    }
+  }
+  return out
+}
+const killAll = (cmdline: string): void => {
+  for (const pid of running(cmdline)) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      /* gone */
+    }
+  }
+}
+
 const services: TerminalService[] = []
+const hostFactories: HostPtyFactory[] = []
 function realService(override: { command?: string[]; limits?: Record<string, unknown> } = {}) {
   const events: TerminalEvent[] = []
   const cfg = testConfig(base).terminals
+  const killer = createTreeKiller({ platform: process.platform })
+  const hosts = createRealHostPtyFactory({ onLost: (pid) => void killer.forceKill(pid).catch(() => undefined), graceMs: 1500 })
+  hostFactories.push(hosts)
   const service = new TerminalService({
     limits: { ...cfg, killGraceMs: 1500, ...(override.command ? { claudeCommandOverride: JSON.stringify(override.command) } : {}), ...override.limits },
     platform: process.platform,
@@ -79,8 +112,8 @@ function realService(override: { command?: string[]; limits?: Record<string, unk
     home,
     cwdFs: nodeCwdFs,
     launchFs: nodeLaunchFs,
-    ptyFactory: createNodePtyFactory(),
-    killer: createTreeKiller({ platform: process.platform }),
+    ptyFactory: hosts.create,
+    killer,
     clock: Date.now,
     newId: createIdGen(),
     enabled: () => true,
@@ -89,10 +122,11 @@ function realService(override: { command?: string[]; limits?: Record<string, unk
     onEvent: (e) => void events.push(e),
   })
   services.push(service)
-  return { service, events }
+  return { service, events, hosts }
 }
 afterEach(async () => {
   for (const s of services.splice(0)) await s.shutdown()
+  for (const h of hostFactories.splice(0)) await h.shutdown()
 })
 
 describe.skipIf(isWin)('the real PTY (Linux sandbox)', () => {
@@ -302,4 +336,199 @@ describe.skipIf(isWin)('the whole daemon on the real PTY', () => {
     h.daemon.terminals.service.list().forEach((t) => expect(t.state).toBe('exited'))
     rmSync(h.dataDir, { recursive: true, force: true })
   })
+})
+
+
+// ---------------------------------------------------------------- the three HIGH findings of the adversarial review
+
+const masterProbe = join(base, 'master-probe.cjs')
+writeFileSync(
+  masterProbe,
+  `const cp = require('node:child_process')
+const own = require('node:fs').readdirSync('/proc/self/fd').filter((f) => { try { return require('node:fs').readlinkSync('/proc/self/fd/' + f) === '/dev/ptmx' } catch { return false } }).length
+const sub = cp.execFileSync('sh', ['-c', 'ls -l /proc/$$/fd | grep -c ptmx || true'], { encoding: 'utf8' }).trim()
+process.stdout.write('MASTERS own=' + own + ' child=' + sub + '\\r\\n')
+setInterval(() => {}, 1000)`,
+)
+describe.skipIf(isWin)('PTY master descriptors never cross from one terminal into another (PTY-MASTER-FD-INHERITANCE)', () => {
+  it('no program of a later terminal holds the master of an earlier one: shells, a claude program and its subprocess', async () => {
+    const { service, hosts } = realService({ command: [NODE, masterProbe], limits: { maxTerminals: 6 } })
+    for (let i = 0; i < 3; i++) {
+      const info = await service.create({ kind: 'shell' })
+      service.attach(info.id, new RecordingSink())
+    }
+    const claude = await service.create({ kind: 'claude', cwd: home })
+    const claudeSink = new RecordingSink()
+    service.attach(claude.id, claudeSink)
+    const m = await until(() => /MASTERS own=(\d+) child=(\d+)/.exec(claudeSink.text), 'the claude program\'s own report')
+    expect(m[1]).toBe('0')
+    expect(m[2]).toBe('0')
+    // the host processes each own exactly one master and nothing else is shared
+    const masters = (pid: number): number => readdirSync(`/proc/${pid}/fd`).filter((f) => { try { return readlinkSync(`/proc/${pid}/fd/${f}`) === '/dev/ptmx' } catch { return false } }).length
+    for (const pid of hosts.hostPids()) expect(masters(pid), `host ${pid}`).toBe(1)
+    expect(hosts.hostCount()).toBe(4)
+    // and the daemon process itself (this one) holds none
+    expect(masters(process.pid)).toBe(0)
+  })
+
+  it('a shell opened after another cannot see the other\'s master, so it cannot type into it or read from it', async () => {
+    const { service } = realService({ limits: { maxTerminals: 3 } })
+    const a = await service.create({ kind: 'shell' })
+    const sinkA = new RecordingSink()
+    const attA = service.attach(a.id, sinkA)
+    attA.write(Buffer.from('A_SECRET=terminal-A-private; echo READY-A\r'))
+    await until(() => /READY-A/.test(sinkA.text.replace(/echo READY-A/g, '')), 'terminal A to be ready')
+    const b = await service.create({ kind: 'shell' })
+    const sinkB = new RecordingSink()
+    const attB = service.attach(b.id, sinkB)
+    // the reviewers' own recipe: find a /dev/ptmx descriptor in this shell and write a command into it
+    attB.write(Buffer.from("FD=$(ls -l /proc/$$/fd | awk '/ptmx/ {print $9}' | head -1); echo FDCOUNT-$(ls -l /proc/$$/fd | grep -c ptmx)-END FD=[$FD]\r"))
+    await until(() => /FDCOUNT-\d+-END/.test(sinkB.text.replace(/FDCOUNT-\$\(/g, '')), 'the fd report')
+    expect(/FDCOUNT-(\d+)-END FD=\[(\d*)\]/.exec(sinkB.text)).toMatchObject({ 1: '0', 2: '' })
+    attB.write(Buffer.from("[ -n \"$FD\" ] && printf 'echo CROSS-INJECTED-$((6*7))-END\\n' >&$FD; echo DONE-B\r"))
+    await until(() => /DONE-B/.test(sinkB.text.replace(/echo DONE-B/g, '')), 'B to finish its attempt')
+    await new Promise((r) => setTimeout(r, 300))
+    expect(sinkA.text).not.toContain('CROSS-INJECTED')
+  })
+})
+
+/** The process shapes of the review: [what it is, what to type, the sleep that proves it is alive, ends with the terminal?] */
+const SHAPES: Array<[string, string, number, boolean]> = [
+  ['a plain background job', 'sleep 781001 &', 781001, true],
+  ['a foreground job', 'sleep 781002', 781002, true],
+  ['nohup in the background', 'nohup sleep 781003 >/dev/null 2>&1 &', 781003, true],
+  ['a subshell job: ( cmd & )', '(sleep 781004 &)', 781004, true],
+  ['a background job ignoring HUP and TERM', `sh -c 'trap "" HUP TERM; sleep 781006' &`, 781006, true],
+  ['a foreground job ignoring HUP, TERM and INT', `sh -c 'trap "" HUP TERM INT; sleep 781007'`, 781007, true],
+  ['an interactive shell ignoring HUP and TERM with a background job', `trap '' HUP TERM; sleep 781009 &`, 781009, true],
+  ['a foreground job ignoring only HUP', `sh -c 'trap "" HUP; sleep 781010'`, 781010, true],
+  ['exec: the PTY child itself is the program', 'exec sleep 781011', 781011, true],
+  ['a nested shell with job control', `sh -c 'set -m; sleep 781012 & wait'`, 781012, true],
+  ['a job moved into its own group by a Claude-like parent', `node -e "require('child_process').spawn('sleep',['781014'],{detached:false,stdio:'ignore'}); setInterval(()=>{},1000)"`, 781014, true],
+  // The documented residual: a process that has already left the terminal's session and been re-parented to init.
+  ['setsid in the background (deliberately daemonised)', 'setsid sleep 781020 >/dev/null 2>&1 &', 781020, false],
+  ['setsid -f (deliberately daemonised)', 'setsid -f sleep 781021', 781021, false],
+]
+
+describe.skipIf(isWin)('closing a terminal ends its whole process tree (TREE-KILL-PROCESS-GROUP-ONLY)', () => {
+  it('every ordinary shape dies on close; only a process that deliberately daemonised itself survives (and is documented)', async () => {
+    for (const [, , leaf] of SHAPES) killAll(`sleep ${leaf}`)
+    const { service } = realService({ limits: { maxTerminals: 16 } })
+    try {
+      const ids: string[] = []
+      for (const [, cmd] of SHAPES) {
+        const info = await service.create({ kind: 'shell' })
+        ids.push(info.id)
+        const att = service.attach(info.id, new RecordingSink())
+        // the shell needs a moment before it reads the line
+        await new Promise((r) => setTimeout(r, 120))
+        att.write(Buffer.from(`${cmd}\r`))
+      }
+      for (const [label, , leaf] of SHAPES) await until(() => running(`sleep ${leaf}`).length > 0, `${label} to be running`, 12_000)
+      await Promise.all(ids.map((id) => service.close(id)))
+      for (const [label, , leaf, ends] of SHAPES) {
+        if (ends) await until(() => running(`sleep ${leaf}`).length === 0, `${label} to be gone after the close`, 8000)
+      }
+      for (const [label, , leaf, ends] of SHAPES) {
+        if (!ends) expect(running(`sleep ${leaf}`).length, `${label} is the documented residual and is still running`).toBeGreaterThan(0)
+      }
+      expect(service.list()).toHaveLength(0)
+    } finally {
+      for (const [, , leaf] of SHAPES) killAll(`sleep ${leaf}`)
+    }
+  }, 60_000)
+
+  it('the switch (closeAll) and a graceful shutdown end the same shapes', async () => {
+    const ordinary = SHAPES.filter(([, , , ends]) => ends).slice(0, 8)
+    for (const [, , leaf] of ordinary) killAll(`sleep ${leaf}`)
+    const { service } = realService({ limits: { maxTerminals: 16 } })
+    try {
+      for (const [, cmd] of ordinary) {
+        const info = await service.create({ kind: 'shell' })
+        const att = service.attach(info.id, new RecordingSink())
+        await new Promise((r) => setTimeout(r, 120))
+        att.write(Buffer.from(`${cmd}\r`))
+      }
+      for (const [label, , leaf] of ordinary) await until(() => running(`sleep ${leaf}`).length > 0, `${label} to be running`, 12_000)
+      await service.closeAll('disabled')
+      for (const [label, , leaf] of ordinary) await until(() => running(`sleep ${leaf}`).length === 0, `${label} to be gone after switching off`, 8000)
+    } finally {
+      for (const [, , leaf] of ordinary) killAll(`sleep ${leaf}`)
+    }
+  }, 60_000)
+
+  it('records processes that could not be ended on the closed event instead of hiding them', async () => {
+    // a real family member the killer is not allowed to signal is hard to build here; the event wiring is covered with a fake killer in terminal.service.test.ts
+    const { service, events } = realService()
+    const info = await service.create({ kind: 'shell' })
+    await service.close(info.id)
+    expect(events.find((e) => e.type === 'closed')).toMatchObject({ type: 'closed', reason: 'user' })
+    expect(events.find((e) => e.type === 'closed' && 'survivors' in e)).toBeUndefined()
+  })
+})
+
+describe.skipIf(isWin)('the terminals die with the daemon, however it dies (DAEMON-DEATH-ORPHANS)', () => {
+  async function daemonLike(cmds: string[]): Promise<{ pid: number; stop: () => void }> {
+    const helper = join(base, `daemon-like-${Math.random().toString(36).slice(2)}.mts`)
+    writeFileSync(
+      helper,
+      `import { createRealHostPtyFactory } from ${JSON.stringify(join(process.cwd(), 'src/terminal/hostClient.ts'))}
+const hosts = createRealHostPtyFactory({ graceMs: 400 })
+const cmds = JSON.parse(process.argv[2])
+const env = { PATH: process.env.PATH, HOME: process.argv[3], TERM: 'xterm' }
+for (const c of cmds) {
+  const pty = await hosts.create({ file: '/bin/sh', args: [], cwd: process.argv[3], env, cols: 80, rows: 24 })
+  pty.onData(() => {})
+  await new Promise((r) => setTimeout(r, 150))
+  pty.write(c + '\\r')
+}
+process.stdout.write('READY\\n')
+setInterval(() => {}, 1000)
+`,
+    )
+    const loader = (await import('node:url')).pathToFileURL((await import('node:module')).createRequire(import.meta.url).resolve('tsx')).href
+    const child = spawn(process.execPath, ['--import', loader, helper, JSON.stringify(cmds), home], { stdio: ['ignore', 'pipe', 'inherit'] })
+    let out = ''
+    child.stdout.on('data', (b) => (out += b))
+    await until(() => out.includes('READY'), 'the daemon-like process to start its terminals', 30_000)
+    return { pid: child.pid as number, stop: () => void child.kill('SIGKILL') }
+  }
+
+  it('SIGKILL of the daemon (no cleanup code runs) ends every terminal tree, also with a later HUP-immune terminal in the mix', async () => {
+    const shapes: Array<[string, number]> = [
+      ['sleep 781101', 781101],
+      ['sleep 781102', 781102],
+      ['(sleep 781103 &)', 781103],
+      [`trap '' HUP; sleep 781104 &`, 781104], // the review's poison: a later terminal whose process outlives a hang-up
+      ['nohup sleep 781105 >/dev/null 2>&1 &', 781105],
+      [`sh -c 'trap "" HUP TERM INT; sleep 781106'`, 781106],
+    ]
+    for (const [, leaf] of shapes) killAll(`sleep ${leaf}`)
+    const d = await daemonLike(shapes.map(([c]) => c))
+    try {
+      for (const [, leaf] of shapes) await until(() => running(`sleep ${leaf}`).length > 0, `sleep ${leaf} to be running`, 12_000)
+      d.stop() // SIGKILL
+      for (const [, leaf] of shapes) await until(() => running(`sleep ${leaf}`).length === 0, `sleep ${leaf} to be gone after the daemon was killed`, 12_000)
+    } finally {
+      for (const [, leaf] of shapes) killAll(`sleep ${leaf}`)
+    }
+  }, 60_000)
+
+  it('a host that is killed from outside ends its program\'s family through the daemon (onLost)', async () => {
+    killAll('sleep 781201')
+    const { service, hosts } = realService()
+    try {
+      const info = await service.create({ kind: 'shell' })
+      const att = service.attach(info.id, new RecordingSink())
+      await new Promise((r) => setTimeout(r, 120))
+      att.write(Buffer.from(`trap '' HUP; sleep 781201 &\r`))
+      await until(() => running('sleep 781201').length > 0, 'the job to run')
+      process.kill(hosts.hostPids()[0] as number, 'SIGKILL')
+      await until(() => service.get(info.id)?.state === 'exited', 'the terminal to be reported as ended')
+      expect(service.get(info.id)?.exitCode).toBeNull()
+      await until(() => running('sleep 781201').length === 0, 'the orphaned job to be killed by the daemon', 8000)
+    } finally {
+      killAll('sleep 781201')
+    }
+  }, 40_000)
 })

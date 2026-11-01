@@ -2,6 +2,9 @@
  * Gestures: an animation-library list (clip metadata the stage resolves to real animations) and a selector shaped by the
  * PresenceStyle. Authority = few, deliberate, low-energy gestures; athletic = grounded posture choices (weight shifts,
  * shoulder settles) are favoured. Cooldowns per clip and a recent-history window stop anything repeating mechanically.
+ *
+ * Cooldowns are measured against the clock it is given. A clock that goes BACKWARDS moves every remembered use back with it
+ * (so a gesture is not on cooldown for as long as the jump was), and a use "in the future" is never a recent use.
  */
 import type { Emotion, PresenceStyle } from '@ai-assistant/shared'
 import type { Rng } from '../util/rng'
@@ -69,6 +72,7 @@ export interface GestureSelectorOptions {
 export class GestureSelector {
   private readonly library: readonly GestureClip[]
   private readonly lastUsed = new Map<string, number>()
+  private lastSeenAt = Number.NEGATIVE_INFINITY
   private history: string[] = []
   private presence: PresenceStyle
   private readonly historySize: number
@@ -107,7 +111,8 @@ export class GestureSelector {
     if (clip.emotions && req.emotion && !clip.emotions.includes(req.emotion)) return 0
     if (req.tags && req.tags.length > 0 && !req.tags.some((t) => clip.tags.includes(t))) return 0
     const used = this.lastUsed.get(clip.id)
-    if (used !== undefined && now - used < clip.cooldownMs) return 0
+    // a use that is "in the future" (the clock went back) is not a recent use
+    if (used !== undefined && used <= now && now - used < clip.cooldownMs) return 0
     const target = this.targetEnergy(req.arousal)
     const fit = Math.exp(-(((clip.energy - target) / 0.3) ** 2))
     let w = clip.weight * (0.15 + 0.85 * fit)
@@ -126,6 +131,7 @@ export class GestureSelector {
 
   /** Choose a gesture for the context, or undefined if nothing is allowed. Records the choice. */
   pick(req: GesturePickRequest, now: number): GestureClip | undefined {
+    if (!this.seen(now)) return undefined
     const weights = new Map<string, number>()
     for (const c of this.library) weights.set(c.id, this.weightOf(c, req, now))
     // never the same clip twice in a row while there is anything else to do
@@ -136,7 +142,19 @@ export class GestureSelector {
     return clip
   }
 
+  /** Accept a time; a regression moves every remembered use back with it. False when `now` is not a usable time. */
+  private seen(now: number): boolean {
+    if (typeof now !== 'number' || !Number.isFinite(now) || Math.abs(now) > 8.64e15) return false
+    if (now < this.lastSeenAt) {
+      const d = now - this.lastSeenAt
+      for (const [k, v] of this.lastUsed) this.lastUsed.set(k, v + d)
+    }
+    this.lastSeenAt = now
+    return true
+  }
+
   record(id: string, now: number): void {
+    if (!this.seen(now)) return
     this.lastUsed.set(id, now)
     this.history = [id, ...this.history].slice(0, this.historySize)
   }

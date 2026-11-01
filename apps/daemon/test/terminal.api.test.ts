@@ -346,6 +346,42 @@ describe('snapshot and events', () => {
   })
 })
 
+describe('churn does not flood the event bus with snapshots (SNAPSHOT-RESET-AMPLIFICATION)', () => {
+  it('a burst of create and close publishes a bounded number of resets, then ONE coalesced trailing reset with the final state', async () => {
+    const h = await harness({ limits: { maxTerminals: 8 } })
+    const before = h.events.filter((e) => e.type === 'snapshot.reset').length
+    const CYCLES = 60
+    for (let i = 0; i < CYCLES; i++) {
+      const { id } = await h.create()
+      await h.call(`/api/terminals/${id}`, { method: 'DELETE' })
+    }
+    await new Promise((r) => setTimeout(r, 20))
+    const sent = h.events.filter((e) => e.type === 'snapshot.reset').length - before
+    // 120 list changes (open, close, removal each) used to mean up to 120+ full snapshots; now at most the burst allowance
+    expect(sent).toBeLessThanOrEqual(21)
+    expect(sent).toBeGreaterThanOrEqual(10)
+    // the trailing reset arrives within about a second and carries the LAST state (no terminals left)
+    const deadline = Date.now() + 3000
+    const last = () => h.events.filter((e): e is Extract<ServerEvent, { type: 'snapshot.reset' }> => e.type === 'snapshot.reset').at(-1)
+    let initial = sent
+    while (Date.now() < deadline && h.events.filter((e) => e.type === 'snapshot.reset').length - before === initial) await new Promise((r) => setTimeout(r, 25))
+    initial = h.events.filter((e) => e.type === 'snapshot.reset').length - before
+    expect(initial).toBeGreaterThan(sent) // the coalesced one came
+    expect(last()?.snapshot.terminals ?? []).toEqual([])
+    // and it is only one: nothing more follows
+    await new Promise((r) => setTimeout(r, 1200))
+    expect(h.events.filter((e) => e.type === 'snapshot.reset').length - before).toBe(initial)
+  })
+
+  it('ordinary use is not delayed at all: a single change is published at once', async () => {
+    const h = await harness()
+    const before = h.events.filter((e) => e.type === 'snapshot.reset').length
+    await h.create()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(h.events.filter((e) => e.type === 'snapshot.reset').length - before).toBe(1)
+  })
+})
+
 describe('switching off', () => {
   it('kills every running terminal and its tree, empties the list and refuses the old tickets', async () => {
     const h = await harness({ limits: { maxTerminals: 8 } })
@@ -425,10 +461,11 @@ describe('real HTTP framing (the node adapter, not the in-memory app)', () => {
   it('a bare DELETE with no body and no Content-Length closes the terminal (a browser sends exactly this)', async () => {
     const h = await harness({ listen: true })
     const { id } = await h.create()
-    const res = await rawHttp(h.port, 'DELETE', `/api/terminals/${id}`, undefined, { Origin: h.origin, Cookie: h.cookie })
+    const paired = { Origin: h.origin, Cookie: h.cookie, 'X-Terminal-Proof': h.daemon.security.terminalProof() }
+    const res = await rawHttp(h.port, 'DELETE', `/api/terminals/${id}`, undefined, paired)
     expect(res.status).toBe(204)
     expect(h.daemon.terminals.service.list()).toHaveLength(0)
-    const missing = await rawHttp(h.port, 'DELETE', '/api/terminals/nope', undefined, { Origin: h.origin, Cookie: h.cookie })
+    const missing = await rawHttp(h.port, 'DELETE', '/api/terminals/nope', undefined, paired)
     expect(missing.status).toBe(404)
   })
 
@@ -437,7 +474,7 @@ describe('real HTTP framing (the node adapter, not the in-memory app)', () => {
     const chunked = (payload: string): Promise<{ status: number; body: string }> =>
       new Promise((resolve, reject) => {
         const req = httpRequest(
-          { host: '127.0.0.1', port: h.port, method: 'POST', path: '/api/terminals', headers: { 'Content-Type': 'application/json', Origin: h.origin, Cookie: h.cookie, 'Transfer-Encoding': 'chunked' } },
+          { host: '127.0.0.1', port: h.port, method: 'POST', path: '/api/terminals', headers: { 'Content-Type': 'application/json', Origin: h.origin, Cookie: h.cookie, 'X-Terminal-Proof': h.daemon.security.terminalProof(), 'Transfer-Encoding': 'chunked' } },
           (res) => {
             let data = ''
             res.on('data', (c) => (data += c))

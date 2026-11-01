@@ -1,4 +1,5 @@
 import { localDateKey } from '../util/time'
+import { clampFinite } from '../util/math'
 import type { DataItem } from './data-state'
 
 export interface TimelineEventInput {
@@ -30,20 +31,28 @@ export interface TimelineResult {
 
 const r3 = (v: number): number => Math.round(v * 1000) / 1000
 const HOUR = 3_600_000
+/** The range of a JavaScript Date: timestamps are clamped into it so that subtracting two of them can never overflow to Infinity. */
+const MAX_TS = 8.64e15
+const clampTs = (v: number): number => clampFinite(v, -MAX_TS, MAX_TS, 0)
+const MAX_WINDOW_MS = 366 * 24 * HOUR
 
 /**
  * Calendar and journal as a ribbon through time: x is time relative to now (the "now" marker sits at x = 0), events that
  * overlap are stacked into lanes (0, +1, -1, +2, ...), today is lit and the past fades. Deterministic.
  */
 export function timelineRibbon(events: readonly TimelineEventInput[], opts: TimelineOptions): TimelineResult {
-  const now = opts.nowMs
-  const pastMs = opts.pastMs ?? 6 * HOUR
-  const futureMs = opts.futureMs ?? 48 * HOUR
-  const upH = opts.unitsPerHour ?? 0.5
-  const maxEvents = Math.max(1, Math.floor(opts.maxEvents ?? 120))
+  // every number that reaches the output is finite whatever the inputs are: options are sanitised, timestamps clamped
+  const now = clampTs(opts.nowMs)
+  const pastMs = clampFinite(opts.pastMs ?? 6 * HOUR, 0, MAX_WINDOW_MS, 6 * HOUR)
+  const futureMs = clampFinite(opts.futureMs ?? 48 * HOUR, 0, MAX_WINDOW_MS, 48 * HOUR)
+  const upH = clampFinite(opts.unitsPerHour ?? 0.5, 0.001, 100, 0.5)
+  const maxEvents = clampFinite(Math.floor(opts.maxEvents ?? 120), 1, 5000, 120)
   const today = localDateKey(now)
+  const maxLength = r3(((pastMs + futureMs) / HOUR) * upH)
 
-  const valid = events.filter((e) => typeof e.id === 'string' && e.id !== '' && Number.isFinite(e.startMs) && (e.endMs === undefined || (Number.isFinite(e.endMs) && e.endMs >= e.startMs)))
+  const valid = (Array.isArray(events) ? events : [])
+    .filter((e) => e !== null && typeof e === 'object' && typeof e.id === 'string' && e.id !== '' && Number.isFinite(e.startMs) && (e.endMs === undefined || (Number.isFinite(e.endMs) && e.endMs >= e.startMs)))
+    .map((e) => ({ ...e, startMs: clampTs(e.startMs), ...(e.endMs !== undefined ? { endMs: clampTs(e.endMs) } : {}) }))
   const inWindow = valid.filter((e) => (e.endMs ?? e.startMs) >= now - pastMs && e.startMs <= now + futureMs)
   inWindow.sort((a, b) => Math.abs(a.startMs - now) - Math.abs(b.startMs - now) || (a.id < b.id ? -1 : 1))
   const kept = inWindow.slice(0, maxEvents).sort((a, b) => a.startMs - b.startMs || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
@@ -76,7 +85,8 @@ export function timelineRibbon(events: readonly TimelineEventInput[], opts: Time
       kind: e.kind ?? 'event',
       label: e.title,
       position: [r3(((e.startMs - now) / HOUR) * upH), laneY(lane), 0],
-      length: r3((Math.max(0, (e.endMs ?? e.startMs) - e.startMs) / HOUR) * upH),
+      // an event that outlasts the window is drawn as long as the window
+      length: Math.min(maxLength, r3((Math.max(0, (e.endMs ?? e.startMs) - e.startMs) / HOUR) * upH)),
       lane,
       isNow,
       isPast,

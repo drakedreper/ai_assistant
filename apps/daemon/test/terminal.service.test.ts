@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createIdGen } from '../src/ids'
-import { silentLogger } from '../src/log'
+import { silentLogger, type Logger } from '../src/log'
 import { TerminalError, TerminalService, type TerminalEvent } from '../src/terminal/service'
 import { PtyUnavailableError } from '../src/terminal/pty'
 import { FakeKiller, MemoryFs, RecordingSink, createFakePtyFactory, type FakePty } from '../src/terminal/testing'
@@ -17,7 +17,7 @@ interface Setup {
   state: { enabled: boolean; env: Record<string, string> }
 }
 
-function setup(opts: { limits?: Partial<ReturnType<typeof testConfig>['terminals']>; platform?: NodeJS.Platform; killerMode?: 'terminate' | 'force' | 'never'; asyncFactory?: boolean } = {}): Setup {
+function setup(opts: { limits?: Partial<ReturnType<typeof testConfig>['terminals']>; platform?: NodeJS.Platform; killerMode?: 'terminate' | 'force' | 'never'; asyncFactory?: boolean; log?: Logger } = {}): Setup {
   const platform = opts.platform ?? 'linux'
   const clock = makeClock()
   const fake = createFakePtyFactory()
@@ -53,7 +53,7 @@ function setup(opts: { limits?: Partial<ReturnType<typeof testConfig>['terminals
     scheduler: { setInterval: (fn) => (sweeps.push(fn), sweeps.length), clearInterval: () => undefined },
     enabled: () => state.enabled,
     projects: () => [{ id: 'p-atlas', name: 'Atlas', rootPath: root }],
-    log: silentLogger,
+    log: opts.log ?? silentLogger,
     onEvent: (e) => void events.push(e),
   })
   service.start()
@@ -558,6 +558,69 @@ describe('close and kill tree', () => {
     expect(t.service.list().every((x) => x.state === 'exited')).toBe(true)
     await expect(t.service.create({ kind: 'shell' })).rejects.toMatchObject({ status: 503, code: 'shutting_down' })
     expect(t.events.filter((e) => e.type === 'closed')).toHaveLength(2)
+  })
+})
+
+describe('the sweep after the leader is gone (TREE-KILL-PROCESS-GROUP-ONLY)', () => {
+  it('a close sweeps the rest of the family once the leader has left: polite, hang up, then reap with the grace period', async () => {
+    const t = setup({ limits: { killGraceMs: 37 } })
+    const { id } = await t.service.create({ kind: 'shell' })
+    const pid = t.fake.last().pid
+    await t.service.close(id)
+    expect(t.killer.terminated).toEqual([pid])
+    expect(t.killer.forced).toEqual([]) // the leader left politely: no hard kill of the leader
+    expect(t.killer.reaped).toEqual([{ pid, graceMs: 37 }]) // but whatever else it started is still swept
+  })
+
+  it('also sweeps after an escalation, and for the idle close, the switch and the shutdown', async () => {
+    const t = setup({ killerMode: 'force', limits: { idleTimeoutMs: 1000, maxTerminals: 4 } })
+    const a = await t.service.create({ kind: 'shell' })
+    t.fake.last().exitOnKill = undefined
+    await t.service.close(a.id)
+    expect(t.killer.forced).toEqual([t.fake.ptys[0]!.pid])
+    expect(t.killer.reaped.map((r) => r.pid)).toEqual([t.fake.ptys[0]!.pid])
+
+    const b = await t.service.create({ kind: 'shell' })
+    t.clock.advance(2000)
+    t.sweeps[0]!()
+    await new Promise((r) => setTimeout(r, 10))
+    expect(t.service.get(b.id)).toMatchObject({ state: 'exited' })
+    await t.service.create({ kind: 'shell' })
+    await t.service.closeAll('disabled')
+    await t.service.create({ kind: 'shell' })
+    await t.service.shutdown()
+    expect(t.killer.reaped).toHaveLength(4) // one per terminal that was killed
+  })
+
+  it('reports how many processes could not be ended on the closed event, and warns without naming anything', async () => {
+    const logs: string[] = []
+    const t = setup({ log: { ...silentLogger, warn: (m, x) => void logs.push(`${m} ${JSON.stringify(x ?? {})}`) } })
+    t.killer.survivors = [9001, 9002, 9003]
+    const { id } = await t.service.create({ kind: 'shell' })
+    await t.service.close(id)
+    const closed = t.events.find((e) => e.type === 'closed')
+    expect(closed).toMatchObject({ type: 'closed', reason: 'user', survivors: 3 })
+    expect(logs.join('\n')).toMatch(/could not be ended/)
+    expect(logs.join('\n')).not.toMatch(/900[123]/) // counts, never pids that could be confused for data
+  })
+
+  it('a sweep that throws never stops the close', async () => {
+    const t = setup()
+    t.killer.reap = async () => {
+      throw new Error('ps exploded')
+    }
+    const { id } = await t.service.create({ kind: 'shell' })
+    await expect(t.service.close(id)).resolves.toBeUndefined()
+    expect(t.service.list()).toHaveLength(0)
+  })
+
+  it('keeps the old guarantee: an exit that is never reported still ends as an exited entry', async () => {
+    const t = setup({ killerMode: 'never' })
+    const { id } = await t.service.create({ kind: 'shell' })
+    t.fake.last().exitOnKill = undefined
+    await t.service.close(id, 'idle')
+    expect(t.service.get(id)).toMatchObject({ state: 'exited', exitCode: null })
+    expect(t.killer.reaped).toHaveLength(1)
   })
 })
 

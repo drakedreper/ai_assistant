@@ -38,8 +38,13 @@ export interface TerminalConfig {
   /** Token bucket for keystrokes: burst size and sustained rate. */
   inputBurstBytes: number
   inputBytesPerSec: number
-  /** A client whose unsent buffer passes this is dropped (the terminal keeps running). */
+  /** A client whose unsent buffer passes this is dropped (the terminal keeps running). It counts the control replies too. */
   maxBufferedBytes: number
+  /** Text frames (resize) per socket: a token bucket. An overrun closes the socket (4429). */
+  textFrameBurst: number
+  textFramesPerSec: number
+  /** Keystroke frames the input bucket dropped, within 10 s, before the socket is closed (4429) as abusive. */
+  maxDroppedInputFrames: number
   ticketTtlMs: number
   /** The first frame must be the auth frame within this long. */
   authTimeoutMs: number
@@ -264,6 +269,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, ctx: Partial<Co
       inputBurstBytes: 1024 * 1024,
       inputBytesPerSec: 512 * 1024,
       maxBufferedBytes: 1024 * 1024,
+      textFrameBurst: 100,
+      textFramesPerSec: 50,
+      maxDroppedInputFrames: 20_000,
       ticketTtlMs: 30_000,
       authTimeoutMs: 5_000,
       maxExitedKept: 8,

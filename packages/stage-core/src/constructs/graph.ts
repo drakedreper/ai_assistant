@@ -3,6 +3,7 @@ import type { BrainLayer } from './layers'
 import { layoutGraph } from './layout'
 import type { LayoutOptions } from './layout'
 import { clamp } from '../util/math'
+import { MAX_EDGES } from './data-state'
 
 /** A note as the daemon's brain index knows it. */
 export interface GraphNoteInput {
@@ -24,13 +25,26 @@ export interface KnowledgeGraphOptions extends LayoutOptions {
   /** Keep at most this many notes (highest importance first). Default 400. */
   maxNodes?: number
   palette?: GraphPalette
+  /**
+   * Keep at most this many edges, heaviest first (ties broken by id, so the choice is deterministic). Default 6000; never
+   * more than the 20000 a stage keeps (`MAX_EDGES`), so the producer can never emit a graph the consumer refuses.
+   */
+  maxEdges?: number
+  /** At most this many edges touch one note, heaviest first. Default 64: a note that links to everything does not turn the constellation into a hairball. */
+  maxEdgesPerNode?: number
 }
 
 export interface KnowledgeGraph {
   nodes: GraphNode[]
   edges: GraphEdge[]
-  stats: { notes: number; shown: number; edges: number; unresolvedLinks: number; truncated: boolean }
+  /** `droppedEdges`: links left out by the edge caps (they exist in the notes, they are just not drawn). */
+  stats: { notes: number; shown: number; edges: number; unresolvedLinks: number; truncated: boolean; droppedEdges: number }
 }
+
+export const DEFAULT_MAX_EDGES = 6000
+export const DEFAULT_MAX_EDGES_PER_NODE = 64
+/** Distinct links considered at all; a vault that links everything to everything is bounded before it is ranked. */
+const CANDIDATE_CAP = 100_000
 
 const PALETTES: Record<GraphPalette, Record<BrainLayer, string>> = {
   cool: { core: '#ffe3b0', strategy: '#ffc77a', episodic: '#7fa8ff', semantic: '#9ad1ff', project: '#8affc1', inbox: '#8a93a8' },
@@ -101,6 +115,7 @@ export function buildKnowledgeGraph(notes: readonly GraphNoteInput[], opts: Know
 
   const edgeMap = new Map<string, GraphEdge>()
   let unresolved = 0
+  let overflow = 0
   for (const n of all) {
     const targets = [...extractWikilinks(n.body ?? ''), ...(n.links ?? [])]
     for (const t of targets) {
@@ -113,10 +128,26 @@ export function buildKnowledgeGraph(notes: readonly GraphNoteInput[], opts: Know
       const key = `${n.id}\u0000${to}`
       const cur = edgeMap.get(key)
       if (cur) cur.weight = Math.min(5, cur.weight + 1)
+      else if (edgeMap.size >= CANDIDATE_CAP) overflow++
       else edgeMap.set(key, { from: n.id, to, weight: 1 })
     }
   }
-  const edges = [...edgeMap.values()].sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : a.to < b.to ? -1 : a.to > b.to ? 1 : 0))
+  const byEnds = (a: GraphEdge, b: GraphEdge): number => (a.from < b.from ? -1 : a.from > b.from ? 1 : a.to < b.to ? -1 : a.to > b.to ? 1 : 0)
+  const maxEdges = clamp(Math.floor(Number.isFinite(opts.maxEdges) ? (opts.maxEdges as number) : DEFAULT_MAX_EDGES), 0, MAX_EDGES)
+  const perNode = clamp(Math.floor(Number.isFinite(opts.maxEdgesPerNode) ? (opts.maxEdgesPerNode as number) : DEFAULT_MAX_EDGES_PER_NODE), 1, 10_000)
+  // heaviest first; the caps bound how many edges the constellation draws, and how many one note can hold
+  const ranked = [...edgeMap.values()].sort((a, b) => b.weight - a.weight || byEnds(a, b))
+  const degree = new Map<string, number>()
+  const kept: GraphEdge[] = []
+  for (const e of ranked) {
+    if (kept.length >= maxEdges) break
+    if ((degree.get(e.from) ?? 0) >= perNode || (degree.get(e.to) ?? 0) >= perNode) continue
+    kept.push(e)
+    degree.set(e.from, (degree.get(e.from) ?? 0) + 1)
+    degree.set(e.to, (degree.get(e.to) ?? 0) + 1)
+  }
+  const edges = kept.sort(byEnds)
+  const droppedEdges = edgeMap.size - edges.length + overflow
 
   const pos = layoutGraph(
     all.map((n) => ({ id: n.id, ...(n.layer ? { layer: n.layer } : {}), importance: imp(n) })),
@@ -137,5 +168,5 @@ export function buildKnowledgeGraph(notes: readonly GraphNoteInput[], opts: Know
     if (n.layer) node.layer = n.layer
     return node
   })
-  return { nodes, edges, stats: { notes: notes.length, shown: nodes.length, edges: edges.length, unresolvedLinks: unresolved, truncated } }
+  return { nodes, edges, stats: { notes: notes.length, shown: nodes.length, edges: edges.length, unresolvedLinks: unresolved, truncated, droppedEdges } }
 }

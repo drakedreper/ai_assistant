@@ -84,6 +84,42 @@ describe('terminal tickets', () => {
     expect(tickets.redeem(ticket, { terminalId: 't1', sessionKey: S1 })).toEqual({ ok: true })
   })
 
+  it('counts failures per session: one session\'s failures never limit another\'s', () => {
+    const { tickets } = store({ maxFailures: 3, failureWindowMs: 10_000 })
+    const mine = tickets.mint({ terminalId: 't1', sessionKey: S1 })
+    const yours = tickets.mint({ terminalId: 't1', sessionKey: S2 })
+    for (let i = 0; i < 3; i++) tickets.redeem(`bad-${i}`, { terminalId: 't1', sessionKey: S2 })
+    expect(tickets.redeem(yours.ticket, { terminalId: 't1', sessionKey: S2 })).toEqual({ ok: false, reason: 'rate_limited' })
+    expect(tickets.redeem(mine.ticket, { terminalId: 't1', sessionKey: S1 })).toEqual({ ok: true })
+  })
+
+  it('a wrong-terminal or wrong-session presentation counts against the PRESENTER, an expired ticket against nobody', () => {
+    const { tickets, clock } = store({ maxFailures: 2, failureWindowMs: 10_000 })
+    // S2 presents S1's ticket twice (wrong session), then is limited; S1 is not
+    for (let i = 0; i < 2; i++) {
+      const t = tickets.mint({ terminalId: 't1', sessionKey: S1 })
+      expect(tickets.redeem(t.ticket, { terminalId: 't1', sessionKey: S2 })).toMatchObject({ reason: 'wrong_session' })
+    }
+    expect(tickets.redeem('anything', { terminalId: 't1', sessionKey: S2 })).toEqual({ ok: false, reason: 'rate_limited' })
+    const own = tickets.mint({ terminalId: 't1', sessionKey: S1 })
+    expect(tickets.redeem(own.ticket, { terminalId: 't1', sessionKey: S1 })).toEqual({ ok: true })
+    // expired ones are free
+    for (let i = 0; i < 5; i++) {
+      const old = tickets.mint({ terminalId: 't1', sessionKey: S1 })
+      clock.advance(31_000)
+      expect(tickets.redeem(old.ticket, { terminalId: 't1', sessionKey: S1 })).toMatchObject({ reason: 'expired' })
+    }
+    const fine = tickets.mint({ terminalId: 't1', sessionKey: S1 })
+    expect(tickets.redeem(fine.ticket, { terminalId: 't1', sessionKey: S1 })).toEqual({ ok: true })
+  })
+
+  it('never tracks an unbounded number of sessions', () => {
+    const { tickets } = store({ maxFailures: 2 })
+    for (let i = 0; i < 1000; i++) tickets.redeem('bad', { terminalId: 't1', sessionKey: `s-${i}`.padEnd(64, '0') })
+    const internal = tickets as unknown as { failures: Map<string, number[]> }
+    expect(internal.failures.size).toBeLessThanOrEqual(256)
+  })
+
   it('bounds the number of pending tickets (the oldest is dropped) and prunes expired ones', () => {
     const { tickets, clock } = store({ maxPending: 3 })
     const first = tickets.mint({ terminalId: 't1', sessionKey: S1 })

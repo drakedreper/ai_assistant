@@ -18,7 +18,7 @@ import {
 import { createDaemon, type Daemon } from '../app'
 import { loadConfig, type DaemonConfig } from '../config'
 import { createProjectResolver } from '../hooks/projects'
-import { silentLogger } from '../log'
+import { silentLogger, type Logger } from '../log'
 import { connectSimulator, type SimClient, type SimClientOptions } from './simClient'
 import type { StageOverrides } from './feature'
 import type { StageConnection } from './hub'
@@ -63,6 +63,27 @@ export interface StageDaemonOptions {
   stage?: StageOverrides
   /** Start the HTTP server on an ephemeral port (default true; needed for the WebSocket). */
   listen?: boolean
+  /** Epoch milliseconds for the whole daemon. Default: real time. Pass `daytimeClock()` where the hour of the run must not matter. */
+  clock?: () => number
+  /** Where the daemon logs (default: nowhere). Tests that check what is, and is not, logged pass a capturing logger. */
+  log?: Logger
+}
+
+/**
+ * A clock that runs at the speed of real time but starts at `hour`:00 local time (today, or tomorrow when that has already
+ * passed, so it never runs behind the real clock). Tests whose outcome depends on the time of day (quiet hours, the
+ * sleepy profile) then run in the same part of the day whatever the hour of the real run and whatever the time zone.
+ */
+export function daytimeClock(hour = 10): () => number {
+  const real0 = Date.now()
+  const at = new Date(real0)
+  at.setHours(hour, 0, 0, 0)
+  if (at.getTime() < real0) {
+    at.setDate(at.getDate() + 1)
+    at.setHours(hour, 0, 0, 0)
+  }
+  const start = at.getTime()
+  return () => start + (Date.now() - real0)
 }
 
 export interface StageDaemon {
@@ -101,7 +122,8 @@ export async function makeStageDaemon(o: StageDaemonOptions): Promise<StageDaemo
   const daemon = createDaemon({
     config,
     budget,
-    log: silentLogger,
+    log: o.log ?? silentLogger,
+    ...(o.clock ? { clock: o.clock } : {}),
     lane: (ctx, { stageTools, memoryDigest }) => (lane = createSecretaryLane({ ...ctx, backend, tools: [...createMockToolBindings(), ...stageTools] }, { digest: memoryDigest })),
     resolver: createProjectResolver({ existsSync: () => false, readFileSync: () => '', isDirectory: () => false }),
     stage: { tts: new FakeTtsProvider({ mode: 'sine', msPerChar: 3, minMs: 120 }), face: new FakeFaceProvider(), ...(o.stage ?? {}) },

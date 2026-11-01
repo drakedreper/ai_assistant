@@ -1,12 +1,16 @@
-import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createBudgetGuard, createFakeBackend, createMockToolBindings, createSdkBackend, createSecretaryLane } from '@ai-assistant/agent-core'
 import { createDaemon } from './app'
 import { formatBanner } from './banner'
 import { ConfigError, describeConfig, loadConfig } from './config'
 import { createLogger } from './log'
+import { ensurePrivateDir } from './security'
 
 async function main(): Promise<void> {
+  // When the console that started the daemon goes away (SIGHUP) its streams start failing with EIO or EPIPE: that must not
+  // turn the graceful shutdown that follows into a crash.
+  process.stdout.on('error', () => undefined)
+  process.stderr.on('error', () => undefined)
   let config
   try {
     config = loadConfig()
@@ -17,9 +21,11 @@ async function main(): Promise<void> {
     }
     throw err
   }
-  mkdirSync(config.dataDir, { recursive: true })
-  const log = createLogger({ level: config.logLevel, literals: () => (config.apiKey ? [config.apiKey] : []) })
-  log.info('starting', describeConfig(config))
+  // The data folder is private (POSIX: 0700); the database and secrets files inside it are 0600.
+  ensurePrivateDir(config.dataDir)
+  // Only the first line is logged before the daemon exists; once it does, ITS logger is used (it masks every secret the
+  // daemon holds: the hook and stage tokens, the sign-in code, session tokens, the API key), not this API-key-only one.
+  createLogger({ level: config.logLevel, literals: () => (config.apiKey ? [config.apiKey] : []) }).info('starting', describeConfig(config))
 
   const backend = config.backend === 'sdk' ? createSdkBackend() : createFakeBackend()
   const tools = createMockToolBindings()
@@ -36,12 +42,12 @@ async function main(): Promise<void> {
   const daemon = createDaemon({
     config,
     budget,
-    log,
     // The stage tools (outfit, scene, gesture, camera, memory, state) join the lane's tools; the lane filters by lane and tier.
     // Her persistent character memory goes into the persona prompt too, for the cloud audience only (never private or sensitive items).
     lane: (ctx, { stageTools, memoryDigest }) => createSecretaryLane({ ...ctx, backend, tools: [...tools, ...stageTools] }, { digest: memoryDigest }),
   })
 
+  const log = daemon.ctx.log
   const info = await daemon.start()
   for (const line of formatBanner({
     version: config.version,
@@ -92,6 +98,9 @@ async function main(): Promise<void> {
   }
   process.on('SIGINT', () => shutdown('SIGINT'))
   process.on('SIGTERM', () => shutdown('SIGTERM'))
+  // SIGHUP is what a closed terminal window sends on POSIX, and what Node reports for a closed console on Windows: the same
+  // graceful stop (it used to end the process on the spot, with the terminals' trees untouched by the daemon).
+  process.on('SIGHUP', () => shutdown('SIGHUP'))
   if (process.platform === 'win32') process.on('SIGBREAK', () => shutdown('SIGBREAK'))
   process.on('unhandledRejection', (reason) => log.error('unhandled rejection', { error: reason instanceof Error ? reason.message : String(reason) }))
 }

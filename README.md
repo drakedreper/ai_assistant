@@ -2,7 +2,7 @@
 
 A local-first personal AI assistant for a Windows 11 PC. A small 3D room on the left holds "Mira" (placeholder name), a warm and playful partner who is also a sharp secretary, and who says plainly that she is an AI. Under the room is a live chat. The rest of the screen is the stage: a daily briefing, mission control for Claude Code sessions, a second brain (an Obsidian-compatible markdown vault with Mira as its interface), life admin, finance from the user's own app "Atlas", and a re-ranked world overview. What separates it from another calendar overview is that every proactive item cites the user's own strategy or knowledge notes ("this touches your Q4 positioning").
 
-Status (2026-10-31): the mockup screens are an accepted **draft**. Phase 1 is built: a local daemon (loopback server, SQLite, Claude Code hook monitor, Secretary lane with a zero-token fake Claude and an Agent SDK backend) and a web client that talks to it. The long-term direction is a live 3D character in an empty "cerebral space" (see [docs/CEREBRAL-SPACE.md](docs/CEREBRAL-SPACE.md)); the engine-agnostic contract for it is drafted in `packages/shared/src/stage.ts`. Nothing has been run against live Claude or on Windows yet.
+Status (2026-11-01): the mockup screens are an accepted **draft**. Built and tested in a Linux sandbox: a local daemon (loopback server, SQLite, Claude Code hook monitor, Secretary lane with a zero-token fake Claude and an Agent SDK backend), a web client, an **embedded terminal** (your own `claude` or a shell in a PTY, off until you enable it), and the **stage backend** for a live 3D assistant (characters, wardrobe, the "cerebral void" scene, mood and behaviour, speech pipeline, an engine-agnostic protocol with a simulator stage). An adversarial review of the terminal and the stage found no critical flaw and all 74 findings are closed ([docs/reviews](docs/reviews/2026-11-01-terminal-and-stage.md)). **Not verified:** Windows, live Claude, real Claude Code hook payloads, any game engine or GPU. The Windows and GPU run is set up as a paste-ready prompt for Claude Code on your PC ([docs/PC-BRINGUP.md](docs/PC-BRINGUP.md)). The long-term direction is described in [docs/CEREBRAL-SPACE.md](docs/CEREBRAL-SPACE.md).
 
 ## Quick start
 
@@ -33,8 +33,10 @@ The daemon prints a one-time sign-in link (`http://127.0.0.1:7421/?code=...`); o
 |---|---|
 | `pnpm dev` | Vite dev server for `apps/web` on 127.0.0.1:5173 |
 | `pnpm typecheck` | `tsc` in every workspace package |
-| `pnpm test` | Vitest in `packages/shared` (fixtures and contracts), `packages/agent-core` (lane, backends, parser) and `apps/daemon` (security, hooks, store, WebSocket) |
+| `pnpm test` | Vitest in `packages/shared` (contracts), `packages/agent-core` (lane, backends, parser), `packages/stage-core` (stage backend and conformance suite) and `apps/daemon` (security, hooks, store, WebSocket, terminal, stage) |
 | `pnpm --filter @ai-assistant/web e2e` | End-to-end: a real daemon process and a real browser (sign-in, live hooks, chat, approvals, reconnect, restart) |
+| `node apps/web/scripts/e2e-terminal.mjs` | End-to-end for the embedded terminal (gate, real PTY, reattach, tickets, cross-origin refusals, process cleanup) |
+| `node apps/web/scripts/e2e-stage.mjs` | End-to-end for the stage backend with the simulator stage over the stage socket (outfit, speech frames, camera, refusals, restart resume) |
 | `pnpm build` | Typecheck and production build of `apps/web` into `apps/web/dist` |
 | `pnpm --filter @ai-assistant/web preview` | Serve the production build on 127.0.0.1:4173 |
 | `node apps/web/scripts/smoke.mjs` | Playwright smoke test through every screen (needs Playwright with Chromium; see the header of the script) |
@@ -55,6 +57,7 @@ apps/
 apps/
   daemon/                 Local daemon: loopback Hono + WebSocket, SQLite store, hook receiver, lane wiring, hook installer CLI
 packages/
+  stage-core/             Stage backend: characters, wardrobe, scene, mood, behaviour, speech, protocol, simulator
   agent-core/             Claude lanes: fake and Agent SDK backends, Secretary lane, emotion tags, permissions, budgets
   shared/                 Contracts shared by the UI and, later, the daemon
     src/schemas/          zod schemas and types (Session, Approval, Note, Proposal, Briefing, Snapshot ...)

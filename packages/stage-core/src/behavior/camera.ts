@@ -5,6 +5,9 @@
  * Hysteresis: a new desire must persist for `dwellMs` before the camera moves, and the current shot is held for a
  * minimum time. Beats cut in quickly but still respect a short hold. An explicit request (the stage_camera tool or the
  * user) switches at once and pins the shot for a while.
+ *
+ * A clock that goes backwards shifts what the director remembers (when the shot began, the pin, the beat) back with it, so a
+ * pinned shot is not pinned for as long as the jump was; a time that is not finite is ignored.
  */
 import type { Clock } from '../util/clock'
 import { fail, ok } from '../util/result'
@@ -47,6 +50,8 @@ const FALLBACKS: Record<ShotId, readonly ShotId[]> = {
 }
 
 const BLEND_MS: Record<ShotId, number> = { wide: 1400, medium: 1000, closeup: 900, profile: 1200, back: 1500, over_shoulder: 1200 }
+/** The blend time of a shot. A scene may name a camera anything path-safe ("toString"), so only OWN keys of the table count. */
+const blendFor = (shot: string): number => (Object.hasOwn(BLEND_MS, shot) ? BLEND_MS[shot as ShotId] : 1000)
 
 export class CameraDirector {
   private current: string | undefined
@@ -54,6 +59,7 @@ export class CameraDirector {
   private pending: { shot: string; since: number } | undefined
   private beatUntil = 0
   private pinnedUntil = 0
+  private lastSeen = Number.NEGATIVE_INFINITY
   private readonly dwellMs: number
   private readonly minHoldMs: number
   private readonly beatMinHoldMs: number
@@ -69,6 +75,20 @@ export class CameraDirector {
     this.current = opts.initial
   }
 
+  /** A usable time (see the header): a regression moves every remembered time back with it. Undefined when `t` is not a time. */
+  private seen(t: number): number | undefined {
+    if (typeof t !== 'number' || !Number.isFinite(t) || Math.abs(t) > 8.64e15) return undefined
+    if (t < this.lastSeen) {
+      const d = t - this.lastSeen
+      this.since += d
+      this.beatUntil += d
+      this.pinnedUntil += d
+      if (this.pending) this.pending = { ...this.pending, since: this.pending.since + d }
+    }
+    this.lastSeen = t
+    return t
+  }
+
   private available(): readonly string[] {
     return this.opts.available?.() ?? SHOT_IDS
   }
@@ -79,14 +99,16 @@ export class CameraDirector {
   }
 
   setCurrent(shot: string, at = this.opts.clock.now()): void {
+    const t = this.seen(at)
     this.current = shot
-    this.since = at
+    this.since = t ?? 0
     this.pending = undefined
   }
 
   /** Mark an emotional or important beat: the camera moves in for a close-up for a few seconds. */
   noteBeat(_kind: BeatKind, now = this.opts.clock.now()): void {
-    this.beatUntil = now + this.beatHoldMs
+    const t = this.seen(now)
+    if (t !== undefined) this.beatUntil = t + this.beatHoldMs
   }
 
   /** What the context calls for, resolved against the shots the scene has (no hysteresis). */
@@ -120,8 +142,9 @@ export class CameraDirector {
 
   /** Evaluate the context; returns a `scene.camera` command when (and only when) the camera should move. */
   update(ctx: CameraContext, now = this.opts.clock.now()): CommandDraft | undefined {
+    if (this.seen(now) === undefined) return undefined
     const desired = this.desiredShot(ctx, now)
-    if (this.current === undefined) return this.switchTo(desired, now, BLEND_MS[desired as ShotId] ?? 1000)
+    if (this.current === undefined) return this.switchTo(desired, now, blendFor(desired))
     if (desired === this.current) {
       this.pending = undefined
       return undefined
@@ -134,13 +157,16 @@ export class CameraDirector {
     const hold = beat || this.current === 'closeup' ? this.beatMinHoldMs : this.minHoldMs
     if (now - this.pending.since < dwell) return undefined
     if (now - this.since < hold) return undefined
-    return this.switchTo(desired, now, BLEND_MS[desired as ShotId] ?? 1000)
+    return this.switchTo(desired, now, blendFor(desired))
   }
 
   /** Explicit shot (the stage_camera tool, a user request): immediate, and held for a while. */
   request(shot: string, now = this.opts.clock.now()): Result<CommandDraft> {
     if (!isShotId(shot)) return fail('unknown_shot', `unknown shot "${shot}" (shots: ${SHOT_IDS.join(', ')})`)
     if (!this.available().includes(shot)) return fail('unavailable', `this scene has no "${shot}" shot`)
+    const t = this.seen(now)
+    if (t === undefined) return fail('invalid_time', 'the clock gave no usable time')
+    now = t
     this.pinnedUntil = now + this.pinMs
     if (shot === this.current) return ok({ type: 'scene.camera', cameraId: shot, blendMs: 0 })
     return ok(this.switchTo(shot, now, BLEND_MS[shot])!)

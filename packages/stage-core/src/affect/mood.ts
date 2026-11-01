@@ -57,6 +57,9 @@ export const MOOD_DELTAS: Readonly<Record<MoodEventType, Delta>> = {
 
 export const MOOD_EVENT_TYPES = Object.keys(MOOD_DELTAS) as MoodEventType[]
 
+/** Event types are looked up in a Map built from the table's OWN entries: "constructor", "toString", "__proto__" and the rest of Object.prototype are not event types. */
+const DELTA_BY_TYPE: ReadonlyMap<string, Delta> = new Map(Object.entries(MOOD_DELTAS))
+
 export interface MoodEngineOptions {
   clock: Clock
   /** The persona's resting mood. Default AUTHORITY-like (slightly positive, low arousal, high dominance). */
@@ -170,8 +173,10 @@ export class MoodEngine {
   apply(event: MoodEvent): Affect {
     const now = this.opts.clock.now()
     this.decayTo(now)
-    const delta = (MOOD_DELTAS as Record<string, Delta | undefined>)[event?.type as string]
-    const m = event?.magnitude === undefined ? 1 : event.magnitude
+    const type = event !== null && typeof event === 'object' ? (event as { type?: unknown }).type : undefined
+    const delta = typeof type === 'string' ? DELTA_BY_TYPE.get(type) : undefined
+    const mag = event !== null && typeof event === 'object' ? (event as { magnitude?: unknown }).magnitude : undefined
+    const m = mag === undefined ? 1 : mag
     if (delta && typeof m === 'number' && Number.isFinite(m)) {
       const k = this.reactivity * clamp(m, 0, 2)
       this.v = clamp(this.v + delta[0] * k, -1, 1)
@@ -215,16 +220,19 @@ export class MoodEngine {
 
   /** Restore a persisted mood; time since `at` decays it toward the baseline on the next read. */
   restore(s: MoodSnapshot): void {
-    this.v = clampFinite(s.valence, -1, 1, this.base.valence)
-    this.a = clampFinite(s.arousal, -1, 1, this.base.arousal)
-    this.d = clampFinite(s.dominance, -1, 1, this.base.dominance)
-    this.at = Number.isFinite(s.at) ? s.at : this.opts.clock.now()
+    // a row from storage is not trusted: anything that is not a finite number (a string, null, an object, a Symbol) falls back to the baseline
+    const o: Partial<MoodSnapshot> = s !== null && typeof s === 'object' ? s : {}
+    this.v = clampFinite(o.valence as number, -1, 1, this.base.valence)
+    this.a = clampFinite(o.arousal as number, -1, 1, this.base.arousal)
+    this.d = clampFinite(o.dominance as number, -1, 1, this.base.dominance)
+    this.at = typeof o.at === 'number' && Number.isFinite(o.at) ? o.at : this.opts.clock.now()
     this.held = undefined
   }
 }
 
 function sanitizeBaseline(b: PresenceStyle['baseline']): PresenceStyle['baseline'] {
-  return { valence: clampFinite(b.valence, -1, 1, 0), arousal: clampFinite(b.arousal, -1, 1, 0), dominance: clampFinite(b.dominance, -1, 1, 0) }
+  const o: Partial<PresenceStyle['baseline']> = b !== null && typeof b === 'object' ? b : {}
+  return { valence: clampFinite(o.valence as number, -1, 1, 0), arousal: clampFinite(o.arousal as number, -1, 1, 0), dominance: clampFinite(o.dominance as number, -1, 1, 0) }
 }
 
 function positive(v: number | undefined, fallback: number): number {

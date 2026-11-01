@@ -11,6 +11,7 @@ import {
   OnOffRequest,
   PersonaPatchRequest,
   Snapshot,
+  type ServerEvent,
   TaskCreateRequest,
   TrustModeRequest,
   TaskColumn,
@@ -23,6 +24,33 @@ import { redactText } from './store/redact'
 /** Hook bodies above this are dropped (still answered 200 so Claude Code never waits or fails). */
 export const MAX_HOOK_BODY = 8 * 1024 * 1024
 const MAX_API_BODY = 512 * 1024
+
+/**
+ * What a page served from a DEV origin (the Vite dev server on :5173, which shares the session cookie with the daemon) may
+ * read from the live feed: nothing about the embedded terminals. The terminals' own routes and sockets already refuse such
+ * origins; this closes the one remaining read, the /ws events that carry them: the terminal list of a `snapshot.reset`, and
+ * the audit entries about terminals ("shell terminal term-...", with the id) inside the settings of a `snapshot.reset` or a
+ * `settings.update`. REST responses carry no CORS headers, so a foreign page cannot read those at all.
+ */
+export function hideTerminals(event: ServerEvent, ownOrigin: boolean, allowDevOrigins: boolean): ServerEvent {
+  if (ownOrigin || allowDevOrigins) return event
+  const aboutTerminals = (a: { action: string; target: string }): boolean => /terminal/i.test(a.action) || /terminal/i.test(a.target)
+  const quiet = <T extends { audit: Array<{ action: string; target: string }> }>(settings: T): T => (settings.audit.some(aboutTerminals) ? { ...settings, audit: settings.audit.filter((a) => !aboutTerminals(a)) } : settings)
+  if (event.type === 'snapshot.reset') {
+    const { snapshot } = event
+    const terminals = snapshot.terminals?.length ? [] : snapshot.terminals
+    const settings = quiet(snapshot.settings)
+    return terminals === snapshot.terminals && settings === snapshot.settings ? event : { ...event, snapshot: { ...snapshot, ...(snapshot.terminals !== undefined ? { terminals } : {}), settings } }
+  }
+  if (event.type === 'settings.update') {
+    const settings = quiet(event.settings)
+    return settings === event.settings ? event : { ...event, settings }
+  }
+  return event
+}
+
+/** POST /api/auth/signout: sign this browser out, or every browser ("everywhere"). Not in the shared contract: nothing in the app calls it by itself. */
+const SignoutRequest = z.object({ everywhere: z.boolean().optional() }).strict()
 
 /** Task edits beyond a column move (the shared TaskMoveRequest only carries the column). */
 export const TaskPatchRequest = z
@@ -111,6 +139,37 @@ export function registerRoutes(app: Hono, ctx: DaemonContext, commands: Commands
     c.header('Set-Cookie', ctx.security.setCookieHeader(result.token, result.maxAgeSec))
     ctx.store.insertAudit({ id: ctx.newId('au'), at: ctx.now().toISOString(), actor: 'you', action: 'Signed in from a browser', target: 'Local daemon', outcome: 'auto' })
     return c.json({ ok: true })
+  })
+
+  // ---------------------------------------------------------------- sign out (needs the cookie, like every browser route)
+  app.post('/api/auth/signout', async (c) => {
+    let everywhere = false
+    const text = await c.req.text()
+    if (text.trim() !== '') {
+      let raw: unknown
+      try {
+        raw = JSON.parse(text)
+      } catch {
+        throw new HttpError(400, 'invalid_json', 'The request body is not valid JSON')
+      }
+      const parsed = SignoutRequest.safeParse(raw)
+      if (!parsed.success) throw new HttpError(400, 'invalid_request', 'The request body does not match the expected shape')
+      everywhere = parsed.data.everywhere === true
+    }
+    const token = ctx.security.parseSessionCookie(c.req.header('cookie'))
+    // The sockets of the revoked sessions (the live feed and terminal viewers) are closed by the daemon's listener.
+    const signedOut = everywhere ? ctx.security.revokeAllSessions() : ctx.security.revokeSession(token) ? 1 : 0
+    c.header('Set-Cookie', ctx.security.clearCookieHeader())
+    ctx.store.insertAudit({
+      id: ctx.newId('au'),
+      at: ctx.now().toISOString(),
+      actor: 'you',
+      action: everywhere ? 'Signed out of every browser' : 'Signed out of this browser',
+      target: 'Local daemon',
+      outcome: 'auto',
+      detail: `${signedOut} session(s)`,
+    })
+    return c.json({ ok: true, signedOut })
   })
 
   // ---------------------------------------------------------------- reads

@@ -23,6 +23,17 @@ import type { FitAddon as XFitAddon } from '@xterm/addon-fit'
  *
  * xterm.js is imported lazily inside `attachTerminal`, so it is never part of the main bundle, and this file stays
  * small enough to import eagerly. Terminal bytes are never logged or stored by this code.
+ *
+ * Pairing. The session cookie is scoped to the HOST, not the port, so another local server the user browses to receives
+ * it. Terminals therefore also need a second secret that is NOT a cookie: the daemon prints it in the FRAGMENT of its sign-in
+ * link (`#tp=...`), which no server ever sees. This file takes it out of the address bar when the app loads, keeps it in
+ * this origin's own storage (another port is another origin and cannot read it), and sends it as X-Terminal-Proof on every
+ * terminal route. Without it the daemon answers 401 `terminal_proof_required` and the page says how to pair.
+ *
+ * What a program in the terminal may do to the page: nothing beyond drawing. No clipboard (OSC 52) and no link addon
+ * are loaded, and the title sequences only change xterm's own state. Hyperlinks a program prints (OSC 8) are shown, but
+ * activating one never opens it by itself: `createLinkHandler` below refuses everything but plain http and https
+ * addresses and asks first, showing the real address, then opens it with noopener and noreferrer.
  */
 
 export class TerminalApiError extends Error {
@@ -41,7 +52,56 @@ function errorFields(data: unknown): { code: string; message: string } {
   return { code: typeof o.error === 'string' ? o.error : 'error', message: typeof o.message === 'string' ? o.message : '' }
 }
 
+const PROOF_KEY = 'aia.terminalProof'
+const PROOF_HEADER = 'X-Terminal-Proof'
+let memoryProof: string | undefined
+
+/** The terminal routes: the ones the daemon guards with the pairing proof. */
+const isTerminalRoute = (path: string): boolean => path === DaemonRoutes.terminals || path.startsWith('/api/terminals/') || path === DaemonRoutes.terminalsEnabled
+
+/**
+ * Take the pairing proof (`#tp=...`) out of the address bar, keep it for this origin, and remove it from the URL (the
+ * history entry too), so it never stays in the address bar, a bookmark or the history. Runs when this module loads.
+ */
+export function capturePairingProof(): void {
+  if (typeof location === 'undefined' || typeof history === 'undefined') return
+  try {
+    const params = new URLSearchParams(location.hash.replace(/^#/, ''))
+    const tp = params.get('tp')
+    if (tp === null) return
+    params.delete('tp')
+    if (/^[A-Za-z0-9_-]{16,128}$/.test(tp)) {
+      memoryProof = tp
+      try {
+        localStorage.setItem(PROOF_KEY, tp)
+      } catch {
+        /* storage blocked: the proof lives for this page only */
+      }
+    }
+    const rest = params.toString()
+    history.replaceState(history.state, '', `${location.pathname}${location.search}${rest ? `#${rest}` : ''}`)
+  } catch {
+    /* an odd URL must never break start-up */
+  }
+}
+capturePairingProof()
+
+function pairingProof(): string | undefined {
+  if (memoryProof) return memoryProof
+  try {
+    return localStorage.getItem(PROOF_KEY) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Has this browser been paired for terminals (does it hold a proof)? A stale one, from an earlier daemon run, still says true. */
+export function hasPairingProof(): boolean {
+  return pairingProof() !== undefined
+}
+
 async function call(method: string, path: string, body?: unknown): Promise<unknown> {
+  const proof = isTerminalRoute(path) ? pairingProof() : undefined
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), 20_000)
   let res: Response
@@ -52,7 +112,11 @@ async function call(method: string, path: string, body?: unknown): Promise<unkno
       credentials: 'same-origin',
       cache: 'no-store',
       signal: ctl.signal,
-      headers: body === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(proof !== undefined ? { [PROOF_HEADER]: proof } : {}),
+      },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
     text = await res.text()
@@ -108,11 +172,68 @@ export async function setTerminalsEnabled(on: boolean): Promise<void> {
 export function describeTerminalError(err: unknown): string {
   if (err instanceof TerminalApiError) {
     if (err.code === 'claude_not_found') return err.message
+    // Before the generic 401: this one is not "signed out", it is "signed in but not paired for terminals".
+    if (err.code === 'terminal_proof_required') return err.message || 'This browser is not paired with the daemon for terminals. Open the sign-in link the daemon printed when it started.'
     if (err.status === 401) return 'This browser is signed out of the daemon. Open the sign-in link it printed when it started.'
     return err.message
   }
   if (err instanceof Error && err.name === 'ZodError') return 'That request is not valid.'
   return err instanceof Error ? err.message.slice(0, 200) : 'Something went wrong.'
+}
+
+// ------------------------------------------------------------------------------------------------ links a program prints
+
+/** The longest address that is offered at all. */
+const MAX_LINK_CHARS = 2000
+
+/**
+ * The address behind a link a program printed, if it is one a person could safely be asked about: plain http or https, a
+ * host, no embedded user name or password (`https://github.com@evil.example/`), no control, zero-width or bidirectional
+ * characters (what you see must be what you get), not absurdly long. The returned `href` is the normalised form, so an
+ * international host name is shown in its punycode spelling (a look-alike letter gives itself away).
+ */
+export function safeLinkTarget(raw: string): { href: string; host: string } | undefined {
+  if (raw.length === 0 || raw.length > MAX_LINK_CHARS) return undefined
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/.test(raw)) return undefined
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return undefined
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined
+  if (u.hostname === '' || u.username !== '' || u.password !== '') return undefined
+  return { href: u.href, host: u.host }
+}
+
+export interface LinkHandlerDeps {
+  /** window.confirm: a native dialog the page cannot style, so a program cannot fake it. */
+  confirm(message: string): boolean
+  /** Opens the address in a new tab, with noopener and noreferrer. */
+  open(href: string): void
+  /** Shows the real address while the pointer is over a link (the title of the terminal frame), or clears it. */
+  setTitle(text: string): void
+  /** A link that was refused (for a short notice). */
+  refused?(): void
+}
+
+/** xterm's ILinkHandler for OSC 8 hyperlinks: validate, show the real address on hover, ask before opening. */
+export function createLinkHandler(deps: LinkHandlerDeps): { activate(event: MouseEvent, text: string): void; hover(event: MouseEvent, text: string): void; leave(): void } {
+  return {
+    activate(_event, text) {
+      const target = safeLinkTarget(text)
+      if (!target) return deps.refused?.()
+      const ok = deps.confirm(`A program in this terminal printed a link.\n\nIt goes to ${target.host}\n${target.href}\n\nOpen it only if you expect it: the words you clicked may say something else, and this terminal runs commands as you.`)
+      if (ok) deps.open(target.href)
+    },
+    hover(_event, text) {
+      deps.setTitle(safeLinkTarget(text)?.href ?? '')
+    },
+    leave() {
+      deps.setTitle('')
+    },
+  }
 }
 
 // ------------------------------------------------------------------------------------------------ the view
@@ -197,6 +318,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, M
 const CLOSE_UNAUTHORIZED = 4401
 const CLOSE_AUTH_TIMEOUT = 4408
 const CLOSE_ALREADY_ATTACHED = 4409
+const CLOSE_RATE_LIMITED = 4429
 
 function wsUrl(id: string): string {
   const u = new URL(DaemonRoutes.terminalWs(id), location.href)
@@ -223,6 +345,15 @@ export async function attachTerminal(opts: TerminalSessionOptions): Promise<Term
     macOptionIsMeta: true,
     screenReaderMode: opts.screenReaderMode ?? false,
     theme: terminalTheme(),
+    // OSC 8 links a program prints: validated, shown on hover, and only opened after a confirmation (see createLinkHandler).
+    linkHandler: createLinkHandler({
+      confirm: (m) => window.confirm(m),
+      open: (href) => void window.open(href, '_blank', 'noopener,noreferrer'),
+      setTitle: (t) => {
+        opts.container.title = t
+      },
+      refused: () => opts.onNotice?.('A link in the terminal was not opened: only plain http and https addresses are offered.'),
+    }),
   })
   const fit: XFitAddon = new FitAddon()
   term.loadAddon(fit)
@@ -235,6 +366,7 @@ export async function attachTerminal(opts: TerminalSessionOptions): Promise<Term
   let attempts = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   let fitFrame = 0
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined
   const encoder = new TextEncoder()
 
   const report = (p: TerminalPhase, detail?: string, exitCode?: number | null): void => {
@@ -245,6 +377,15 @@ export async function attachTerminal(opts: TerminalSessionOptions): Promise<Term
     if (!ws || ws.readyState !== WebSocket.OPEN || !live) return
     ws.send(JSON.stringify({ type: 'resize', cols: clamp(term.cols, MIN_COLS, MAX_COLS), rows: clamp(term.rows, MIN_ROWS, MAX_ROWS) }))
   }
+  // Dragging a window edge changes the size dozens of times a second: only the size it settles on is sent (the daemon gives
+  // text frames a small budget and closes a socket that floods them).
+  const scheduleResize = (): void => {
+    if (resizeTimer !== undefined) clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(() => {
+      resizeTimer = undefined
+      sendResize()
+    }, 80)
+  }
 
   const sendBytes = (bytes: Uint8Array): void => {
     if (!ws || ws.readyState !== WebSocket.OPEN || !live) return
@@ -254,7 +395,7 @@ export async function attachTerminal(opts: TerminalSessionOptions): Promise<Term
   const dataSub = term.onData((d) => sendBytes(encoder.encode(d)))
   // Legacy mouse reports are raw bytes in a "binary string".
   const binSub = term.onBinary((d) => sendBytes(Uint8Array.from(d, (c) => c.charCodeAt(0) & 0xff)))
-  const resizeSub = term.onResize(() => sendResize())
+  const resizeSub = term.onResize(() => scheduleResize())
 
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === 'keydown' && e.key === 'Escape' && e.shiftKey) {
@@ -370,6 +511,7 @@ export async function attachTerminal(opts: TerminalSessionOptions): Promise<Term
         report('reconnecting', 'Retrying with a new ticket')
         return schedule(300 * attempts)
       }
+      if (ev.code === CLOSE_RATE_LIMITED) opts.onNotice?.('The terminal connection was closed for sending too many messages; reconnecting.')
       attempts = ready ? 1 : attempts + 1
       report('reconnecting', 'The connection dropped; reconnecting')
       schedule(backoff())
@@ -402,6 +544,7 @@ export async function attachTerminal(opts: TerminalSessionOptions): Promise<Term
       if (disposed) return
       disposed = true
       if (timer !== undefined) clearTimeout(timer)
+      if (resizeTimer !== undefined) clearTimeout(resizeTimer)
       cancelAnimationFrame(fitFrame)
       observer.disconnect()
       window.removeEventListener('pagehide', onPageHide)

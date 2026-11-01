@@ -7,6 +7,7 @@ import {
   closeTerminal,
   createTerminal,
   describeTerminalError,
+  hasPairingProof,
   listTerminals,
   type TerminalSession,
   type TerminalViewState,
@@ -232,6 +233,8 @@ export function TerminalTab() {
 
   const current = list.find((t) => t.id === selected)
   const running = list.filter((t) => t.state === 'running').length
+  // Terminals need the pairing from the sign-in link besides the cookie (see terminalClient.ts); say so before it fails.
+  const unpaired = !hasPairingProof()
 
   return (
     <div className="flex flex-col gap-3" data-testid="terminal-tab">
@@ -239,10 +242,19 @@ export function TerminalTab() {
         <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden />
         <p>
           <strong className="font-semibold text-fg">Terminals run commands as you</strong>, on this PC, with your normal permissions. &ldquo;Claude&rdquo; here is your own{' '}
-          <code className="font-mono text-fg">claude</code>: you sign in to it yourself and Mira never touches its login. The daemon only relays the bytes: what you type and what is printed
-          is kept in memory so a reload can reattach, and is never written to disk, logged, or shown to Mira. Mira cannot open or read a terminal.
+          <code className="font-mono text-fg">claude</code>: you sign in to it yourself and Mira never touches its login. The daemon only relays the bytes: recent output is kept in memory so a reload can
+          reattach, and neither it nor what you type is written to disk or logs by the daemon or shown to Mira. The programs inside the terminal keep their own records, though: your shell writes a
+          history file (for example <code className="font-mono text-fg">~/.bash_history</code>) and Claude Code keeps its own session transcripts, so do not type secrets you would not want there.
+          Mira cannot open or read a terminal.
         </p>
       </div>
+
+      {unpaired && (
+        <p role="note" className="rounded-xl border border-warn/30 bg-warn/[0.07] px-3 py-2 text-[12px] leading-snug text-muted" data-testid="terminal-unpaired">
+          <strong className="font-semibold text-fg">This browser is not paired for terminals yet.</strong> Open the sign-in link the daemon printed when it started (the part after the # is the pairing), or restart the
+          daemon for a new link. It is needed because another program on this PC could receive this browser&apos;s cookie.
+        </p>
+      )}
 
       <Panel
         title="Terminals"

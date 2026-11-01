@@ -72,6 +72,11 @@ export const STAGE_KV = {
 
 /** How long after the user's last message the camera and the behaviour treat the moment as "a conversation". */
 const CONVERSATION_MS = 20_000
+/** character.interact from the stage: a bucket of this many, refilled at INTERACT_PER_SEC (a person cannot poke faster than that). */
+const INTERACT_BURST = 10
+const INTERACT_PER_SEC = 4
+/** character_remember: writes allowed per minute (a deliberate tool call is a handful per conversation). */
+const MEMORY_WRITES_PER_MINUTE = 20
 const LIVE_MIN_GAP_MS = 1500
 
 const THANKS = /\b(thanks|thank you|thx|great job|well done|nice work|perfect, thanks|brilliant)\b/i
@@ -185,7 +190,12 @@ export class StageHub {
   private anchorsRev = -1
   private assetsCache: Asset[] | undefined
   /** Counters for the README's honesty and the tests: what the hub refused to do. */
-  readonly dropped = { terminalInput: 0, stageBinary: 0, invalidEvents: 0 }
+  readonly dropped = { terminalInput: 0, stageBinary: 0, invalidEvents: 0, interact: 0 }
+  /** Token bucket for character.interact (see takeInteract). */
+  private interactTokens = INTERACT_BURST
+  private interactAt = Number.NEGATIVE_INFINITY
+  /** The last "cannot be shown" warning (id and code), so a repeated bind does not repeat it. */
+  private unusableLogged: string | undefined
 
   constructor(private readonly d: StageHubDeps) {
     this.timers = d.timers ?? unrefTimers
@@ -202,7 +212,8 @@ export class StageHub {
     this.characters = createCharacterService({ repo: this.stageStore.characterRepo(), catalog: this.catalog, clock: this.clock, newId: this.ids })
     this.scenes = createSceneService({ repo: this.stageStore.sceneRepo(), catalog: this.catalog, clock: this.clock, newId: this.ids })
     this.wardrobe = createWardrobeService({ characters: this.characters, catalog: this.catalog, newId: this.ids, onChange: (c) => this.onWardrobeChange(c) })
-    this.memory = createCharacterMemory({ repo: this.stageStore.memoryRepo(), clock: this.clock, newId: this.ids })
+    // a model that calls character_remember in a loop gets at most this many writes per minute (stage-core refuses the rest as rate_limited)
+    this.memory = createCharacterMemory({ repo: this.stageStore.memoryRepo(), clock: this.clock, newId: this.ids, maxWritesPerMinute: MEMORY_WRITES_PER_MINUTE })
 
     // First run only: the seed catalog, the two characters and the void. Afterwards the database is the truth.
     const seeded = d.store.kvGet<number>(STAGE_KV.seeded)
@@ -472,6 +483,19 @@ export class StageHub {
       this.behavior = undefined
       return
     }
+    // A character the stage will never be shown (its base is gone or unlicensed, its parameters are outside the adult
+    // envelope, it is not validly clothed) gets no mood or behaviour either: nothing would be performed on a figure the
+    // stage does not have. Fixing the cause (and any change that calls this again) brings her back.
+    const usable = this.characters.check(a.id)
+    if (!usable.ok) {
+      this.mood = undefined
+      this.behavior = undefined
+      const key = `${a.id}:${usable.code}`
+      if (key !== this.unusableLogged) this.d.log.warn('stage: the assistant cannot be shown, so she is not animated', { character: a.id, code: usable.code, problem: usable.error.slice(0, 160) })
+      this.unusableLogged = key
+      return
+    }
+    this.unusableLogged = undefined
     const carried = this.mood?.snapshot()
     const mood = MoodEngine.fromPresence(a.presence, this.clock)
     const row = carried ?? this.stageStore.loadMood()
@@ -666,7 +690,17 @@ export class StageHub {
     const a = this.assistant()
     if (a && this.mood) out.push({ type: 'perform.affect', characterId: a.id, affect: this.mood.get(), blendMs: 0 })
     // what she was doing (idle profile, posture, gaze), as far as this process knows it
-    for (const c of this.mirror.replayLook()) if (c.type !== 'perform.affect') out.push(c)
+    const look = this.mirror.replayLook().filter((c) => c.type !== 'perform.affect')
+    out.push(...look)
+    // The mirror only learns what went through a stage connection. The director starts ticking at boot, so a stage that
+    // connects LATER (the engine takes a while to start) would never hear the profile she is already in (asleep during quiet
+    // hours, say) until it changed. What the hub itself observed fills those gaps.
+    if (a && this.mood) {
+      const seen = new Set(look.map((c) => c.type))
+      if (!seen.has('perform.idle') && this.obs.idle) out.push({ type: 'perform.idle', characterId: a.id, profile: this.obs.idle })
+      if (!seen.has('perform.posture') && this.obs.posture) out.push({ type: 'perform.posture', characterId: a.id, posture: this.obs.posture })
+      if (!seen.has('perform.gaze') && this.obs.gaze) out.push({ type: 'perform.gaze', characterId: a.id, target: this.obs.gaze, speed: 0.5, saccades: true })
+    }
     return out
   }
 
@@ -687,6 +721,22 @@ export class StageHub {
 
   // ------------------------------------------------------------------------------- stage -> backend
 
+  /** True when another character.interact may be acted on now: a bucket of INTERACT_BURST that refills INTERACT_PER_SEC per second. */
+  private takeInteract(): boolean {
+    const now = this.d.clock()
+    if (Number.isFinite(now)) {
+      const dt = now - this.interactAt
+      if (dt < 0) this.interactAt = now // the clock went back: start over from here instead of stalling until it catches up
+      else if (dt > 0) {
+        this.interactTokens = Math.min(INTERACT_BURST, this.interactTokens + (dt / 1000) * INTERACT_PER_SEC)
+        this.interactAt = now
+      }
+    }
+    if (this.interactTokens < 1) return false
+    this.interactTokens -= 1
+    return true
+  }
+
   private onStageEvent(conn: StageConnection, ev: StageEvent): void {
     if (this.conn !== conn) return
     try {
@@ -704,6 +754,12 @@ export class StageHub {
           this.behavior?.onUserPresence(ev)
           break
         case 'character.interact':
+          // A stage can send these as fast as it likes: past the bucket they are counted and ignored, so they cannot turn
+          // into a flood of gaze commands (or memory) behind them.
+          if (!this.takeInteract()) {
+            this.dropped.interact++
+            break
+          }
           // Region-level only, and never escalating: she turns to the user; a drag or a grab on the body is mildly surprising.
           this.behavior?.lookAt({ kind: 'user' }, 2500)
           if (ev.kind === 'drag' || ev.region === 'body') this.mood?.apply({ type: 'surprise', magnitude: 0.2 })
@@ -717,7 +773,8 @@ export class StageHub {
           this.dropped.terminalInput++
           break
         case 'error':
-          this.d.log.warn('the stage reported an error', { fatal: ev.fatal, message: redactText(ev.message, 120) })
+          // The flag and the length only: the message is the stage's own text and can quote anything (spoken text, paths, keys).
+          this.d.log.warn('the stage reported an error', { fatal: ev.fatal, length: ev.message.length })
           if (ev.fatal) this.closeConnection('stage', 'the stage reported a fatal error')
           break
         default:

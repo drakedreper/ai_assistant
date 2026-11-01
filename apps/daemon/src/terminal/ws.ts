@@ -5,6 +5,7 @@ import { TerminalClientMessage, TerminalServerMessage } from '@ai-assistant/shar
 import type { TerminalConfig } from '../config'
 import type { Logger } from '../log'
 import type { Security } from '../security'
+import { TokenBucket } from './limits'
 import { sessionKeyOf, type TicketStore } from './tickets'
 import { TerminalError, type TerminalAttachment, type TerminalService, type TerminalSink } from './service'
 
@@ -25,9 +26,11 @@ import { TerminalError, type TerminalAttachment, type TerminalService, type Term
  * TerminalServerMessage (ready, exit, error) from the server, validated with the shared zod schemas.
  *
  * Limits: one client per terminal; frames above maxInputFrameBytes close the socket (1009, enforced by `ws`);
- * a token bucket on keystrokes (excess frames are dropped with an error message, never silently); a slow consumer
- * (unsent bytes above maxBufferedBytes) is dropped and can reattach; a ping every 30 s drops dead peers.
- * The PTY keeps running when the browser goes away.
+ * a token bucket on keystrokes (excess frames are dropped with an error message, never silently, but at most one such
+ * notice a second: a flood must not be answered one for one); a second, small token bucket on TEXT frames (resize), whose
+ * overrun closes the socket (4429); a slow consumer (unsent bytes above maxBufferedBytes, counting the replies the daemon
+ * itself queued, not only the output) is dropped and can reattach; a ping every 30 s drops dead peers and sockets whose
+ * session was signed out. The PTY keeps running when the browser goes away.
  */
 
 export const TERMINAL_WS_PREFIX = '/ws/terminal/'
@@ -38,16 +41,24 @@ export const CLOSE = {
   authTimeout: 4408,
   alreadyAttached: 4409,
   badFrame: 4400,
+  /** Too many frames: a client that floods text frames, or keeps sending input after it was told to slow down. */
+  rateLimited: 4429,
   tooMany: 4503,
 } as const
 
 const MAX_AUTH_FRAME_BYTES = 2048
 const MAX_UNAUTHENTICATED = 8
+/** `input_rate_limited` is told to the client at most this often (it is a notice, not a reply per frame). */
+const NOTICE_EVERY_MS = 1000
+/** Input frames dropped by the bucket within this window count towards closing an abusive client. */
+const ABUSE_WINDOW_MS = 10_000
 
 export interface TerminalUpgrade {
   /** Is this upgrade request for a terminal socket (so the main /ws handler must leave it alone)? */
   matches(pathname: string): boolean
   attach(server: Server): void
+  /** Close (4401) every socket whose browser session was signed out or revoked. The terminals keep running. */
+  dropRevoked(): number
   close(): Promise<void>
   stats(): { accepted: number; rejected: number; authFailed: number; droppedSlow: number }
   socketCount(): number
@@ -60,6 +71,8 @@ export interface TerminalUpgradeDeps {
   limits: TerminalConfig
   log: Logger
   heartbeatMs?: number
+  /** The clock for the text-frame budget and the notice coalescing. Default Date.now. */
+  now?: () => number
   /** The daemon's own origin only (and the dev origins when explicitly allowed): see TERMINAL_ALLOW_DEV_ORIGINS. */
   originAllowed?: (origin: string | undefined) => boolean
 }
@@ -94,6 +107,9 @@ export function createTerminalUpgrade(deps: TerminalUpgradeDeps): TerminalUpgrad
   const wss = new WebSocketServer({ noServer: true, maxPayload: limits.maxInputFrameBytes, perMessageDeflate: false })
   const stats = { accepted: 0, rejected: 0, authFailed: 0, droppedSlow: 0 }
   const alive = new WeakMap<object, boolean>()
+  /** The browser session each socket was opened with (a hash). */
+  const sessions = new WeakMap<object, string>()
+  const now = deps.now ?? Date.now
   let unauthenticated = 0
   let server: Server | undefined
   let heartbeat: ReturnType<typeof setInterval> | undefined
@@ -149,6 +165,14 @@ export function createTerminalUpgrade(deps: TerminalUpgradeDeps): TerminalUpgrad
 
   const sendControl = (ws: WebSocket, msg: TerminalServerMessage): void => {
     if (ws.readyState !== ws.OPEN) return
+    // A client that never reads must not make the daemon queue replies without bound: the output path is capped, and so
+    // are the control replies (the same bound counts everything queued for that socket).
+    if (ws.bufferedAmount > limits.maxBufferedBytes) {
+      stats.droppedSlow++
+      log.warn('dropped a slow terminal client', { cause: 'control replies' })
+      ws.terminate()
+      return
+    }
     try {
       ws.send(JSON.stringify(TerminalServerMessage.parse(msg)))
     } catch {
@@ -156,7 +180,11 @@ export function createTerminalUpgrade(deps: TerminalUpgradeDeps): TerminalUpgrad
     }
   }
 
+  /** Sockets we have started to close: nothing they still send is looked at, and they are closed (and cut off) only once. */
+  const closing = new WeakSet<object>()
   const closeSocket = (ws: WebSocket, code: number, reason: string): void => {
+    if (closing.has(ws)) return // a flood that keeps coming must not pile up a timer and a listener per frame
+    closing.add(ws)
     try {
       ws.close(code, reason)
     } catch {
@@ -170,11 +198,17 @@ export function createTerminalUpgrade(deps: TerminalUpgradeDeps): TerminalUpgrad
 
   function onSocket(ws: WebSocket, terminalId: string, sessionKey: string): void {
     alive.set(ws, true)
+    sessions.set(ws, sessionKey)
     ws.on('pong', () => alive.set(ws, true))
     ws.on('error', () => ws.terminate())
 
     let authed = false
     let attachment: TerminalAttachment | undefined
+    // Text frames (resize) have a small budget of their own: far above what a person can produce, far below a flood.
+    const textBucket = new TokenBucket(limits.textFrameBurst, limits.textFramesPerSec, now)
+    let lastNotice = Number.NEGATIVE_INFINITY
+    let dropWindowStart = now()
+    let droppedInWindow = 0
     unauthenticated++
     let counted = true
     const uncount = (): void => {
@@ -216,6 +250,7 @@ export function createTerminalUpgrade(deps: TerminalUpgradeDeps): TerminalUpgrad
     })
 
     ws.on('message', (data, isBinary) => {
+      if (closing.has(ws)) return // already being closed: whatever else arrives is not looked at
       if (!authed) {
         clearTimeout(authTimer)
         const fail = (): void => {
@@ -257,10 +292,23 @@ export function createTerminalUpgrade(deps: TerminalUpgradeDeps): TerminalUpgrad
       if (!attachment) return
       if (isBinary) {
         const result = attachment.write(dataToBuffer(data))
-        if (result === 'rate_limited') sendControl(ws, { type: 'error', message: 'input_rate_limited' })
-        else if (result === 'too_large') closeSocket(ws, 1009, 'frame too large')
+        if (result === 'rate_limited') {
+          const t = now()
+          if (t - dropWindowStart > ABUSE_WINDOW_MS) {
+            dropWindowStart = t
+            droppedInWindow = 0
+          }
+          // Dropped, and the client is told (never silently), but a flood is not answered frame for frame; one that keeps
+          // flooding anyway is cut off.
+          if (++droppedInWindow > limits.maxDroppedInputFrames) return closeSocket(ws, CLOSE.rateLimited, 'too many frames')
+          if (t - lastNotice >= NOTICE_EVERY_MS) {
+            lastNotice = t
+            sendControl(ws, { type: 'error', message: 'input_rate_limited' })
+          }
+        } else if (result === 'too_large') closeSocket(ws, 1009, 'frame too large')
         return
       }
+      if (!textBucket.take(1)) return closeSocket(ws, CLOSE.rateLimited, 'too many frames')
       const buf = dataToBuffer(data)
       let msg: TerminalClientMessage
       try {
@@ -275,12 +323,26 @@ export function createTerminalUpgrade(deps: TerminalUpgradeDeps): TerminalUpgrad
     })
   }
 
+  const dropRevoked = (): number => {
+    let n = 0
+    for (const ws of wss.clients) {
+      const key = sessions.get(ws)
+      if (key !== undefined && security.validateSessionKey(key)) continue
+      n++
+      closeSocket(ws, CLOSE.unauthorized, 'signed out')
+    }
+    return n
+  }
+
   return {
     matches: (pathname) => pathname.startsWith(TERMINAL_WS_PREFIX),
+    dropRevoked,
     attach(s) {
       server = s
       s.on('upgrade', onUpgrade)
       heartbeat = setInterval(() => {
+        // A session revoked from the command line is noticed here at the latest.
+        dropRevoked()
         for (const ws of wss.clients) {
           if (alive.get(ws) === false) {
             ws.terminate()

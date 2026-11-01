@@ -45,8 +45,8 @@ export type TerminalEvent =
   | { type: 'opened'; info: TerminalInfo }
   /** The process ended by itself (the user typed exit, claude quit, it crashed). */
   | { type: 'exited'; info: TerminalInfo }
-  /** The daemon killed a running terminal. */
-  | { type: 'closed'; info: TerminalInfo; reason: TerminalCloseReason }
+  /** The daemon killed a running terminal. `survivors` is how many of its processes could not be ended (omitted when none). */
+  | { type: 'closed'; info: TerminalInfo; reason: TerminalCloseReason; survivors?: number }
   /** An entry left the list (user removed it, the cap forgot it, terminals were switched off). */
   | { type: 'removed'; id: string }
   /** A request was refused before anything started. `code` is the stable error code. */
@@ -94,6 +94,8 @@ export interface TerminalServiceOptions {
   projects: () => ServiceProject[]
   /** CLAUDE_EXECUTABLE */
   claudeExecutable?: string | undefined
+  /** Folders of the daemon's own install: NODE_PATH entries inside them never reach a terminal (see env.ts). */
+  daemonRoots?: readonly string[]
   log: Logger
   onEvent?: (e: TerminalEvent) => void
 }
@@ -123,6 +125,8 @@ interface Rec {
   lastActivity: number
   closeReason: TerminalCloseReason | undefined
   killing: Promise<void> | undefined
+  /** Processes of the family that could not be ended by the last kill (a process of another user, say). */
+  survivors: number
   exitWaiters: Array<() => void>
 }
 
@@ -216,7 +220,7 @@ export class TerminalService {
     try {
       const { cwd, project } = this.resolveStart(req)
       const launch = this.resolveLaunch(req.kind)
-      const env = buildTerminalEnv(this.o.env(), { platform: this.o.platform })
+      const env = buildTerminalEnv(this.o.env(), { platform: this.o.platform, ...(this.o.daemonRoots ? { daemonRoots: this.o.daemonRoots } : {}) })
       let pty: PtyLike
       try {
         pty = await this.o.ptyFactory({ file: launch.file, args: launch.args, cwd, env, cols, rows })
@@ -310,6 +314,7 @@ export class TerminalService {
       lastActivity: now,
       closeReason: undefined,
       killing: undefined,
+      survivors: 0,
       exitWaiters: [],
     }
     this.terms.set(rec.id, rec)
@@ -484,7 +489,7 @@ export class TerminalService {
     const alreadyClosing = rec.killing !== undefined
     if (wasRunning) {
       await this.kill(rec, reason)
-      if (!alreadyClosing) this.emit({ type: 'closed', info: this.info(rec), reason })
+      if (!alreadyClosing) this.emit({ type: 'closed', info: this.info(rec), reason, ...(rec.survivors > 0 ? { survivors: rec.survivors } : {}) })
     }
     if (reason === 'user') this.forget(rec)
     else this.pruneExited()
@@ -496,12 +501,18 @@ export class TerminalService {
     await Promise.all(
       running.map(async (r) => {
         await this.kill(r, reason)
-        this.emit({ type: 'closed', info: this.info(r), reason })
+        this.emit({ type: 'closed', info: this.info(r), reason, ...(r.survivors > 0 ? { survivors: r.survivors } : {}) })
       }),
     )
     if (reason === 'disabled') for (const r of [...this.terms.values()]) this.forget(r)
   }
 
+  /**
+   * End the terminal's whole family. Polite first (SIGTERM to every process of it, and a hang-up of the PTY), then, if the
+   * leader does not leave within the grace, SIGKILL. Whether or not the leader left, the REST of the family is then given
+   * the same grace and killed hard if it is still there: a plain `exit` of the shell does not end a job that ignores
+   * SIGHUP and SIGTERM, and the tree is what the user asked to close.
+   */
   private kill(rec: Rec, reason: TerminalCloseReason): Promise<void> {
     if (rec.killing) return rec.killing
     rec.closeReason = rec.closeReason ?? reason
@@ -518,14 +529,24 @@ export class TerminalService {
       } catch {
         /* the pty is already closed */
       }
-      if (await this.waitExit(rec, killGraceMs)) return
-      try {
-        await this.o.killer.forceKill(pid)
-        rec.pty.kill()
-      } catch {
-        /* gone */
+      let leaderGone = await this.waitExit(rec, killGraceMs)
+      if (!leaderGone) {
+        try {
+          await this.o.killer.forceKill(pid)
+          rec.pty.kill()
+        } catch {
+          /* gone */
+        }
+        leaderGone = await this.waitExit(rec, killGraceMs)
       }
-      if (await this.waitExit(rec, killGraceMs)) return
+      try {
+        const left = await this.o.killer.reap(pid, killGraceMs)
+        rec.survivors = left.length
+        if (left.length > 0) this.o.log.warn('some processes of a closed terminal could not be ended', { id: rec.id, count: left.length })
+      } catch (err) {
+        this.o.log.warn('terminal sweep failed', { id: rec.id, error: err instanceof Error ? err.message : 'unknown' })
+      }
+      if (leaderGone) return
       // The OS never told us it ended. Do not leave a "running" entry that nothing can stop.
       this.o.log.warn('terminal did not report an exit after a forced kill', { id: rec.id })
       this.markExited(rec, null)

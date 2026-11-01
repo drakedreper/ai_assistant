@@ -11,6 +11,7 @@ import { identityTransform } from '../scene/math'
 import { fail, ok } from '../util/result'
 import type { Result } from '../util/result'
 import { isSafeId } from '../util/safe'
+import { clampFinite } from '../util/math'
 
 export interface TerminalPaneOptions {
   id?: string
@@ -41,15 +42,20 @@ export const MAX_COLS = 400
 export const MIN_ROWS = 5
 export const MAX_ROWS = 200
 
-/** Split terminal output into command-sized chunks without breaking a UTF-16 surrogate pair. */
-export function chunkTerminalOutput(data: string, max = MAX_WRITE_CHUNK): string[] {
-  if (data.length === 0) return []
+/**
+ * Split terminal output into command-sized chunks without breaking a UTF-16 surrogate pair. Terminates for ANY `max`: it
+ * is clamped to at least 2 (a surrogate pair), so every chunk makes progress; NaN means the default; Infinity means the
+ * largest chunk allowed (64 KiB).
+ */
+export function chunkTerminalOutput(data: string, max: number = MAX_WRITE_CHUNK): string[] {
+  if (typeof data !== 'string' || data.length === 0) return []
+  const size = clampFinite(Math.floor(max), 2, 64 * 1024, MAX_WRITE_CHUNK)
   const out: string[] = []
   for (let i = 0; i < data.length; ) {
-    let end = Math.min(data.length, i + max)
+    let end = Math.min(data.length, i + size)
     if (end < data.length) {
       const c = data.charCodeAt(end - 1)
-      if (c >= 0xd800 && c <= 0xdbff) end-- // do not split a surrogate pair
+      if (c >= 0xd800 && c <= 0xdbff && end - 1 > i) end-- // do not split a surrogate pair (with size >= 2 there is always room to step back)
     }
     out.push(data.slice(i, end))
     i = end

@@ -26,7 +26,7 @@ describe('locator safety', () => {
     ['props/chair', true],
     ['props\\chair.glb', true],
     ['./props/chair', true],
-    ['asset://chairs/a', true],
+    ['asset:chairs/a', true],
     ['https://cdn.example.com/a.vrm', true],
     ['pack:props/a', true],
   ])('accepts %s', (loc, expected) => {
@@ -46,6 +46,8 @@ describe('locator safety', () => {
     ['c:/users/other/x', 'outside'],
     ['\\\\server\\share\\x', 'UNC'],
     ['//server/share', 'UNC'],
+    // after asset:/pack: the rest is a plain relative path, so a network-style "//host/x" is refused like a bare //host/x
+    ['asset://chairs/a', 'network-style path after the scheme'],
     ['file:///C:/x', 'scheme'],
     ['javascript:alert(1)', 'scheme'],
     ['data:text/html;base64,AAAA', 'scheme'],
@@ -77,7 +79,8 @@ describe('locator safety', () => {
 
   it('honours a custom scheme allowlist and rejects non-strings', () => {
     expect(validateLocator('https://a.example/x', { allowedSchemes: ['asset'] }).ok).toBe(false)
-    expect(validateLocator('ASSET://x', { allowedSchemes: ['asset'] }).ok).toBe(true)
+    expect(validateLocator('ASSET:x', { allowedSchemes: ['asset'] })).toEqual({ ok: true, kind: 'url', normalized: 'asset:x' })
+    expect(validateLocator('ASSET://x', { allowedSchemes: ['asset'] }).ok).toBe(false)
     expect(validateLocator(5 as unknown as string).ok).toBe(false)
     expect(validateLocator('x'.repeat(2000)).ok).toBe(false)
   })

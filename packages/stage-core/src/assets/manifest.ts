@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { Asset, WardrobeSlot } from '@ai-assistant/shared'
 import { licenceIssues } from './license'
 import { isSafeId, isSafeKey } from '../util/safe'
-import { checkBaseDeclaration } from '../characters/adult-policy'
+import { checkParamDeclarations } from '../characters/adult-policy'
 import { WEARABLE_KINDS } from '../core/equipped'
 
 export const ASSET_MANIFEST_SCHEMA = 'mira-asset/1' as const
@@ -10,14 +10,24 @@ export const ASSET_MANIFEST_SCHEMA = 'mira-asset/1' as const
 const PARAM_ID = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/
 const TAG = /^[a-z0-9][a-z0-9:_-]{0,31}$/
 export const COLOR_MAX = 0xffffff
+/** Largest manifest (as JSON text) the catalog stores: room for a 256 KiB thumbnail data URI plus the metadata. */
+export const MAX_MANIFEST_CHARS = 400_000
+/** Slots that make up the clothed baseline: only an outfit may occupy them. */
+export const BASELINE_SLOTS: readonly string[] = ['top', 'bottom', 'fullBody']
+const PARAM_VALUE_LIMIT = 1e9
 
 /**
  * asset.json: the shared `Asset` plus manifest-only fields. Conventions the schema enforces:
  *  - ids are short and path-safe; parameter ids are lowercase dotted names ("body.height_cm");
  *  - a colour parameter is declared with min 0, max 16777215 and the default as a 24-bit integer (0xRRGGBB);
- *  - wearables (hair, outfit, accessory) occupy at least one slot, everything else occupies none;
+ *  - wearables (hair, outfit, accessory) occupy at least one slot, everything else occupies none; the slots that make
+ *    up the clothed baseline (top, bottom, fullBody) belong to outfits only, so an accessory cannot stand in for clothes;
  *  - a character_base fits at least one rig and carries the attestation `adult: true`, and its declared slider
- *    ranges must sit inside the adult envelope (characters/adult-policy.ts).
+ *    ranges must sit inside the adult envelope (characters/adult-policy.ts);
+ *  - the adult envelope's parameter rules hold for EVERY kind: only a base declares a governed id, nobody declares an
+ *    alias of one (the catalog adds the rules that depend on whether the owner vetted the asset);
+ *  - sizes are bounded: at most 256 parameters, licence text and ids as in the shared schema, numbers within 1e9, and
+ *    the whole manifest within MAX_MANIFEST_CHARS (a 40 MB manifest cannot be stored and resent in every snapshot).
  */
 export const AssetManifest = Asset.extend({
   schema: z.literal(ASSET_MANIFEST_SCHEMA).default(ASSET_MANIFEST_SCHEMA),
@@ -45,6 +55,7 @@ export const AssetManifest = Asset.extend({
   if (wearable && a.slots.length === 0) issue(`a ${a.kind} must occupy at least one slot`, ['slots'])
   if (!wearable && a.slots.length > 0) issue(`a ${a.kind} cannot occupy wardrobe slots`, ['slots'])
   if (a.kind === 'hair' && !a.slots.every((s) => s === 'hair')) issue('hair assets occupy only the hair slot', ['slots'])
+  if (a.kind !== 'outfit' && a.slots.some((s) => BASELINE_SLOTS.includes(s))) issue(`only an outfit can occupy the top, bottom or fullBody slot (a ${a.kind} cannot stand in for clothes)`, ['slots'])
   if (!wearable && a.hides.length > 0) issue(`a ${a.kind} cannot hide body regions`, ['hides'])
   if (a.slots.includes(WardrobeSlot.enum.fullBody) && a.slots.some((s) => s === 'top' || s === 'bottom')) {
     issue('a fullBody item replaces top and bottom; it does not also list them', ['slots'])
@@ -53,8 +64,8 @@ export const AssetManifest = Asset.extend({
   if (a.kind === 'character_base') {
     if (a.rigFamilies.length === 0) issue('a character base must declare the rig family it uses', ['rigFamilies'])
     if (a.adult !== true) issue('a character base must carry the attestation adult: true', ['adult'])
-    for (const v of checkBaseDeclaration(a.params)) issue(v, ['params'])
   }
+  for (const v of checkParamDeclarations(a.kind, a.params)) issue(v, ['params'])
 
   const seen = new Set<string>()
   a.params.forEach((p, i) => {
@@ -63,6 +74,7 @@ export const AssetManifest = Asset.extend({
     if (seen.has(p.id)) issue(`duplicate parameter id "${p.id}"`, [...at, 'id'])
     seen.add(p.id)
     if (![p.min, p.max, p.default].every(Number.isFinite)) issue('min, max and default must be finite numbers', at)
+    else if ([p.min, p.max, p.default].some((v) => Math.abs(v) > PARAM_VALUE_LIMIT)) issue(`min, max and default must be within +-${PARAM_VALUE_LIMIT}`, at)
     else if (p.min > p.max) issue('min is greater than max', at)
     else if (p.default < p.min || p.default > p.max) issue('default is outside min..max', at)
     if (p.type === 'color') {

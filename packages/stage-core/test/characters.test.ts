@@ -395,21 +395,43 @@ describe('adult envelope', () => {
 })
 
 describe('restore', () => {
-  it('clears an equipped item whose asset vanished, reports it, and says so when no baseline can be refilled', () => {
+  it('when no baseline can be refilled it saves NOTHING (never an unclothed state), says so, refuses to show her, and heals when the item returns', () => {
     const w = makeAssistant()
+    const before = w.characters.get(w.assistant.id)!
+    const shirt = w.catalog.get('outfit.crisp-shirt')!
     w.catalog.remove('outfit.crisp-shirt')
     const rep = w.characters.restore()
-    expect(rep.repaired.map((r) => r.slot)).toContain('top')
-    expect(rep.problems).toHaveLength(1) // no baseline-tagged top remains in this catalog
-    expect(rep.assistant?.id).toBe(w.assistant.id)
+    expect(rep.problems).toHaveLength(1) // no vetted baseline top remains in this catalog
+    expect(rep.problems[0]!.message).toMatch(/clothed baseline could not be restored/)
+    expect(rep.repaired).toEqual([]) // nothing was changed...
+    expect(w.characters.get(w.assistant.id)).toEqual(before) // ...so her stored look is exactly as it was (still slot-wise clothed)
+    expect(isClothedBaseline(w.characters.get(w.assistant.id)!.equipped)).toBe(true)
+    expect(rep.assistant?.id).toBe(w.assistant.id) // nothing else to switch to
+    // a stage is never told about a figure that cannot be shown clothed
+    const load = w.characters.loadCommand(w.assistant.id)
+    expect(!load.ok && load.code).toBe('invalid_equipped')
+    expect(!load.ok && load.error).toMatch(/not in the catalog/)
+    // the shirt comes back (a damaged catalog row was fixed): she is whole again, nothing was lost
+    w.catalog.add(shirt, { vetted: true })
+    expect(w.characters.loadCommand(w.assistant.id).ok).toBe(true)
+    expect(w.characters.restore().problems).toEqual([])
   })
-  it('refills the baseline from another baseline-tagged item when one is available', () => {
+  it('refills the baseline from another VETTED baseline-tagged item when one is available', () => {
     const w = makeAssistant()
-    w.catalog.add({ id: 'outfit.alt-shirt', kind: 'outfit', name: 'Alt shirt', locator: 'w/alt', slots: ['top'], hides: ['torso', 'arms'], tags: ['baseline'], license: LIC })
+    w.catalog.add({ id: 'outfit.alt-shirt', kind: 'outfit', name: 'Alt shirt', locator: 'w/alt', slots: ['top'], hides: ['torso', 'arms'], tags: ['baseline'], license: LIC }, { vetted: true })
     w.catalog.remove('outfit.crisp-shirt')
     const rep = w.characters.restore()
     expect(rep.problems).toEqual([])
+    expect(rep.repaired.map((r) => r.slot)).toEqual(['top'])
     expect(w.characters.get(w.assistant.id)!.equipped.top).toBe('outfit.alt-shirt')
+  })
+  it('never refills from an asset that only carries the "baseline" tag (a registered asset cannot make itself the default look)', () => {
+    const w = makeAssistant()
+    w.catalog.add({ id: 'a-hijack.top', kind: 'outfit', name: 'Hijack top', locator: 'w/h', slots: ['top'], hides: ['torso', 'arms'], tags: ['baseline'], license: LIC })
+    w.catalog.remove('outfit.crisp-shirt')
+    const rep = w.characters.restore()
+    expect(rep.problems).toHaveLength(1)
+    expect(w.characters.get(w.assistant.id)!.equipped.top).toBe('outfit.crisp-shirt') // untouched, not replaced by the hijacker
   })
   it('clears items whose licence now forbids use and fixes mixed fullBody states', () => {
     const w = makeAssistant()

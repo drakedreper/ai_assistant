@@ -13,8 +13,17 @@ export interface Logger {
 export interface LoggerOptions {
   level?: LogLevel
   sink?: (line: string) => void
-  /** Extra exact-match secrets to mask (the hook token, the API key). */
+  /** Extra exact-match secrets to mask: every secret value the daemon holds (hook and stage tokens, the pending sign-in code, issued session tokens, the API key). */
   literals?: () => string[]
+}
+
+/**
+ * Credentials that have a recognisable SHAPE are masked on top of the exact literals, so one from an earlier run (a session
+ * cookie in a pasted header) or from another source never reaches a line: the session cookie `aia_sid_<port>=<token>` and the
+ * one-time sign-in code in a URL (`?code=...`).
+ */
+function maskCredentialShapes(line: string): string {
+  return line.replace(/(aia_sid_\d+=)[^\s;,"']+/gi, '$1***').replace(/([?&]code=)[A-Za-z0-9_-]{16,}/g, '$1***')
 }
 
 function metaToString(meta: Record<string, unknown> | undefined): string {
@@ -36,7 +45,7 @@ export function createLogger(opts: LoggerOptions = {}): Logger {
   const emit = (level: Exclude<LogLevel, 'silent'>, msg: string, meta?: Record<string, unknown>) => {
     if (ORDER[level] < threshold) return
     const line = `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} ${msg}${metaToString(meta)}`
-    sink(redactText(line, 600, opts.literals?.() ?? []))
+    sink(redactText(maskCredentialShapes(line), 600, opts.literals?.() ?? []))
   }
   return {
     debug: (m, x) => emit('debug', m, x),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildTerminalEnv, isDaemonInternalVar } from '../src/terminal/env'
+import { buildHostEnv, buildTerminalEnv, isDaemonInternalVar, scrubNodeOptions, scrubNodePath } from '../src/terminal/env'
 
 describe('isDaemonInternalVar', () => {
   it('removes the daemon namespaces, whatever follows', () => {
@@ -85,5 +85,87 @@ describe('buildTerminalEnv', () => {
     const copy = { ...daemonEnv }
     buildTerminalEnv(daemonEnv, { platform: 'linux' })
     expect(daemonEnv).toEqual(copy)
+  })
+})
+
+
+describe('the launcher\'s module loaders do not reach a terminal (NODE_PATH-INHERITED)', () => {
+  const ROOTS = ['/home/user/ai_assistant', '/home/user/ai_assistant/apps/daemon']
+  const SHIM = '/home/user/ai_assistant/node_modules/.pnpm/tsx@4.23.15/node_modules/tsx/dist/node_modules:/home/user/ai_assistant/node_modules/.pnpm/tsx@4.23.15/node_modules/tsx/node_modules:/home/user/ai_assistant/node_modules/.pnpm/node_modules'
+
+  it('NODE_PATH: entries inside the daemon\'s own tree (the pnpm and tsx shim) go, the user\'s own stay', () => {
+    expect(scrubNodePath(SHIM, 'linux', ROOTS)).toBeUndefined()
+    expect(scrubNodePath(`${SHIM}:/usr/local/lib/node_modules_global:/opt/mine`, 'linux', ROOTS)).toBe('/usr/local/lib/node_modules_global:/opt/mine')
+    // a pnpm virtual store is recognised even outside the roots (a global install elsewhere)
+    expect(scrubNodePath('/somewhere/else/node_modules/.pnpm/ws@8/node_modules:/keep/me', 'linux', [])).toBe('/keep/me')
+    // the roots themselves count, a sibling folder with the same prefix does not
+    expect(scrubNodePath('/home/user/ai_assistant:/home/user/ai_assistant-notes', 'linux', ROOTS)).toBe('/home/user/ai_assistant-notes')
+    // a filesystem root as a "daemon root" never wipes everything
+    expect(scrubNodePath('/usr/lib/node', 'linux', ['/'])).toBe('/usr/lib/node')
+    expect(scrubNodePath('', 'linux', ROOTS)).toBeUndefined()
+  })
+
+  it('NODE_PATH on Windows: ; separated, case-insensitive, backslashes', () => {
+    const roots = ['C:\\Users\\Ana\\dev\\ai_assistant']
+    const v = 'C:\\USERS\\ana\\dev\\AI_ASSISTANT\\node_modules\\.pnpm\\tsx@4\\node_modules;D:\\tools\\global;c:\\users\\ana\\dev\\ai_assistant\\apps\\daemon\\node_modules'
+    expect(scrubNodePath(v, 'win32', roots)).toBe('D:\\tools\\global')
+  })
+
+  it('NODE_OPTIONS: only the code-loading flags go (with their values), in every spelling; the rest is the user\'s own', () => {
+    expect(scrubNodeOptions('--use-openssl-ca')).toBe('--use-openssl-ca')
+    expect(scrubNodeOptions('--require /repo/preflight.cjs --import file:///repo/loader.mjs --max-old-space-size=4096')).toBe('--max-old-space-size=4096')
+    expect(scrubNodeOptions('--require=/repo/a.cjs -r /repo/b.cjs --loader=x --experimental-loader y --import=z')).toBeUndefined()
+    expect(scrubNodeOptions('--use-openssl-ca --import "C:\\Program Files\\x\\loader.mjs" --no-warnings')).toBe('--use-openssl-ca --no-warnings')
+    expect(scrubNodeOptions('--require')).toBeUndefined()
+    expect(scrubNodeOptions('')).toBeUndefined()
+  })
+
+  it('buildTerminalEnv applies both rules, drops an emptied variable, and keeps unrelated ones', () => {
+    const env = buildTerminalEnv(
+      { PATH: '/usr/bin', NODE_PATH: SHIM, NODE_OPTIONS: '--require /repo/preflight.cjs --import file:///repo/loader.mjs', NODE_EXTRA_CA_CERTS: '/etc/corp-ca.pem', NODE_ENV: 'development' },
+      { platform: 'linux', daemonRoots: ROOTS },
+    )
+    expect(env.NODE_PATH).toBeUndefined()
+    expect(env.NODE_OPTIONS).toBeUndefined()
+    expect(env).toMatchObject({ PATH: '/usr/bin', NODE_EXTRA_CA_CERTS: '/etc/corp-ca.pem', NODE_ENV: 'development' })
+    const partial = buildTerminalEnv({ NODE_PATH: `${SHIM}:/usr/local/lib/node_modules_global`, NODE_OPTIONS: '--use-openssl-ca --import tsx' }, { platform: 'linux', daemonRoots: ROOTS })
+    expect(partial).toMatchObject({ NODE_PATH: '/usr/local/lib/node_modules_global', NODE_OPTIONS: '--use-openssl-ca' })
+  })
+
+  it('on Windows the scrub works on a differently cased variable name', () => {
+    const env = buildTerminalEnv({ Path: 'C:\\Windows', node_path: 'C:\\dev\\ai\\node_modules\\.pnpm\\x', Node_Options: '--import tsx' }, { platform: 'win32', daemonRoots: ['C:\\dev\\ai'] })
+    expect(Object.keys(env).map((k) => k.toUpperCase())).not.toContain('NODE_PATH')
+    expect(Object.keys(env).map((k) => k.toUpperCase())).not.toContain('NODE_OPTIONS')
+    expect(env.Path).toBe('C:\\Windows')
+  })
+
+  it('without daemonRoots a pnpm virtual-store entry is still removed', () => {
+    expect(buildTerminalEnv({ NODE_PATH: SHIM }, { platform: 'linux' }).NODE_PATH).toBeUndefined()
+  })
+})
+
+describe('buildHostEnv: the environment of a PTY host process', () => {
+  it('has no secret and nothing of the daemon\'s configuration, but keeps the loader variables the daemon itself runs under', () => {
+    const env = buildHostEnv({
+      PATH: '/usr/bin',
+      HOME: '/home/ana',
+      SystemRoot: 'C:\\Windows',
+      NODE_PATH: '/modules',
+      NODE_OPTIONS: '--use-openssl-ca',
+      ANTHROPIC_API_KEY: 'sk-ant-planted',
+      AI_ASSISTANT_HOOK_TOKEN: 'planted-hook',
+      STAGE_TOKEN: 'planted-stage',
+      DAEMON_PORT: '7421',
+      DATA_DIR: '/d',
+      TERMINAL_CLAUDE_COMMAND: '["x"]',
+      BUDGET_GLOBAL_USD: '10',
+      MIRA_X: '1',
+      EXCHANGE_CODE: 'planted',
+    })
+    expect(env).toEqual({ PATH: '/usr/bin', HOME: '/home/ana', SystemRoot: 'C:\\Windows', NODE_PATH: '/modules', NODE_OPTIONS: '--use-openssl-ca' })
+  })
+
+  it('drops undefined values and invalid names', () => {
+    expect(buildHostEnv({ A: undefined, 'B=C': 'x', '': 'y', D: 'ok\0bad', E: 'fine' })).toEqual({ E: 'fine' })
   })
 })

@@ -13,6 +13,14 @@
  * to match frames to the `perform.speak` that announced them. A collision between two utterances in flight at once is
  * possible in principle (2^-32 per pair) and harmless in practice: the stage plays by arrival and the backend never has
  * more than a handful in flight.
+ * The UTF-8 bytes are the ones `TextEncoder` (WHATWG) produces, so a lone surrogate is encoded as U+FFFD (EF BF BD) and two
+ * ids that differ only in lone surrogates hash alike; an engine must encode the same way. The daemon makes the ids itself
+ * (`utt-...`, ASCII), so nobody outside can provoke it.
+ *
+ * Face weights are ARKit blendshape coefficients: finite and within 0..1. The decoder REFUSES a frame holding a weight
+ * outside that range (3.4e38 would otherwise reach a stage's morph targets), and the encoder refuses to write one. Times
+ * are 0..2^53-1 ms in BOTH directions (an encoder that accepted what the decoder refuses would produce frames no stage
+ * can read).
  *
  * The DECODER never throws: every malformed input yields { ok: false, error }. The ENCODER throws FrameEncodeError on
  * programmer mistakes (NaN weights, odd PCM length), which the pipeline never produces.
@@ -32,7 +40,7 @@ export const MAX_AUDIO_PAYLOAD_BYTES = 96_000
 /** 10 seconds of 30 fps frames in one message. */
 export const MAX_FACE_FRAMES_PER_MESSAGE = 300
 
-export type FrameError = 'not_binary' | 'truncated' | 'oversized' | 'unknown_kind' | 'bad_time' | 'empty_payload' | 'misaligned' | 'non_finite' | 'payload_too_large'
+export type FrameError = 'not_binary' | 'truncated' | 'oversized' | 'unknown_kind' | 'bad_time' | 'empty_payload' | 'misaligned' | 'non_finite' | 'weight_range' | 'payload_too_large'
 
 export interface BinaryFrame {
   kind: BinaryFrameKind
@@ -79,7 +87,9 @@ export function decodeFrame(data: unknown): DecodeResult {
       if (payloadLen % FACE_FRAME_BYTES !== 0) return { ok: false, error: 'misaligned' }
       if (payloadLen / FACE_FRAME_BYTES > MAX_FACE_FRAMES_PER_MESSAGE) return { ok: false, error: 'payload_too_large' }
       for (let o = FRAME_HEADER_BYTES; o < bytes.byteLength; o += 4) {
-        if (!Number.isFinite(view.getFloat32(o, true))) return { ok: false, error: 'non_finite' }
+        const w = view.getFloat32(o, true)
+        if (!Number.isFinite(w)) return { ok: false, error: 'non_finite' }
+        if (w < 0 || w > 1) return { ok: false, error: 'weight_range' }
       }
     }
     return { ok: true, frame: { kind: kind as BinaryFrameKind, utteranceIdHash: hash, tStartMs: t, payload: bytes.slice(FRAME_HEADER_BYTES) } }
@@ -98,7 +108,7 @@ export interface EncodeInput {
 
 export function encodeFrame(f: EncodeInput): Uint8Array {
   if (!KINDS.has(f.kind)) throw new FrameEncodeError(`unknown frame kind ${String(f.kind)}`)
-  if (!Number.isFinite(f.tStartMs) || f.tStartMs < 0) throw new FrameEncodeError('tStartMs must be a finite number >= 0')
+  if (!Number.isFinite(f.tStartMs) || f.tStartMs < 0 || f.tStartMs > Number.MAX_SAFE_INTEGER) throw new FrameEncodeError('tStartMs must be a finite number between 0 and 2^53-1')
   const hash = typeof f.utteranceId === 'string' ? utteranceIdHash(f.utteranceId) : f.utteranceId
   if (!Number.isInteger(hash) || hash < 0 || hash > 0xffffffff) throw new FrameEncodeError('utterance hash must be a u32')
   if (f.payload.byteLength === 0) throw new FrameEncodeError('empty payload')
@@ -137,6 +147,7 @@ export function encodeFaceFrame(utteranceId: string | number, tStartMs: number, 
   for (let i = 0; i < weights.length; i++) {
     const w = weights[i] as number
     if (!Number.isFinite(w)) throw new FrameEncodeError('face weights must be finite')
+    if (w < 0 || w > 1) throw new FrameEncodeError('face weights must be within 0..1')
     view.setFloat32(i * 4, w, true)
   }
   return encodeFrame({ kind: BinaryFrameKind.face, utteranceId, tStartMs, payload })

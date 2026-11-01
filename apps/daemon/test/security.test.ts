@@ -312,17 +312,29 @@ describe('exchange code', () => {
     expect((await d.call('/api/auth/exchange', { json: { code: 'x'.repeat(43) }, cookie: false, origin: false })).status).toBe(403)
   })
 
-  it('is rate limited: after 10 failures even the valid code is refused until the window passes', async () => {
+  it('is rate limited for WRONG codes, but a correct code is never refused (nobody can lock the owner out by guessing)', async () => {
     const d = await daemon({ signIn: false })
     const { code } = d.daemon.security.issueExchangeCode()
     for (let i = 0; i < 10; i++) {
       expect((await d.call('/api/auth/exchange', { json: { code: `${'y'.repeat(42)}${i}` }, cookie: false })).status).toBe(401)
     }
-    const limited = await d.call('/api/auth/exchange', { json: { code }, cookie: false })
+    // tripped: further wrong codes are refused outright, with a Retry-After
+    const limited = await d.call('/api/auth/exchange', { json: { code: 'z'.repeat(43) }, cookie: false })
     expect(limited.status).toBe(429)
     expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0)
-    d.clock.advance(61_000)
+    // ... but the owner's code still works at once (it used to be refused until the window passed: a local denial of service)
     expect((await d.call('/api/auth/exchange', { json: { code }, cookie: false })).status).toBe(200)
+  })
+
+  it('the limiter forgets after its window, and a good sign-in clears it', async () => {
+    const d = await daemon({ signIn: false })
+    const first = d.daemon.security.issueExchangeCode().code
+    for (let i = 0; i < 10; i++) await d.call('/api/auth/exchange', { json: { code: `${'y'.repeat(42)}${i}` }, cookie: false })
+    expect((await d.call('/api/auth/exchange', { json: { code: 'z'.repeat(43) }, cookie: false })).status).toBe(429)
+    d.clock.advance(61_000)
+    expect((await d.call('/api/auth/exchange', { json: { code: 'z'.repeat(43) }, cookie: false })).status).toBe(401) // wrong again, but no longer limited
+    expect((await d.call('/api/auth/exchange', { json: { code: first }, cookie: false })).status).toBe(200)
+    expect((await d.call('/api/auth/exchange', { json: { code: first }, cookie: false })).status).toBe(401) // single use
   })
 
   it('the exchange route is the only open API route', async () => {

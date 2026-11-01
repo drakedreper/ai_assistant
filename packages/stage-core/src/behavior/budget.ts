@@ -6,6 +6,9 @@
  *   P2 FYI     - never spoken unprompted (batched into the briefing).
  * Replies to the user are always allowed (they wake her); the morning briefing is once per day outside quiet hours.
  * A muted assistant speaks nothing at all (text continues elsewhere).
+ *
+ * A clock that goes BACKWARDS does not lock the budget: the time of the last proactive utterance moves back with it, so the
+ * minimum gap is measured from the same moment as before. A time that is not finite is treated as "no time passed".
  */
 import type { Clock } from '../util/clock'
 import { inQuietHours, localDateKey } from '../util/time'
@@ -53,12 +56,22 @@ export class InterruptionBudget {
   private used = 0
   private briefingDay = ''
   private lastProactiveAt: number | undefined
+  private lastSeen = Number.NEGATIVE_INFINITY
 
   constructor(private readonly opts: InterruptionBudgetOptions) {
     this.quiet = opts.quietHours
     this.limit = opts.dailyLimit !== undefined ? Math.max(0, Math.floor(opts.dailyLimit)) : dailyLimitFor(opts.proactivity ?? 55)
     this.minGapMs = opts.minGapMs ?? 20 * 60_000
     this.muted = opts.muted ?? false
+  }
+
+  /** The clock, checked: a regression shifts what is remembered back with it; a time that is not usable is the last good one. */
+  private time(): number {
+    const t = this.opts.clock.now()
+    if (typeof t !== 'number' || !Number.isFinite(t) || Math.abs(t) > 8.64e15) return Number.isFinite(this.lastSeen) ? this.lastSeen : 0
+    if (t < this.lastSeen && this.lastProactiveAt !== undefined) this.lastProactiveAt += t - this.lastSeen
+    this.lastSeen = t
+    return t
   }
 
   private roll(now: number): void {
@@ -81,17 +94,17 @@ export class InterruptionBudget {
   isMuted(): boolean {
     return this.muted
   }
-  isQuiet(now = this.opts.clock.now()): boolean {
+  isQuiet(now = this.time()): boolean {
     return inQuietHours(this.quiet, now)
   }
   remaining(): number {
-    this.roll(this.opts.clock.now())
+    this.roll(this.time())
     return Math.max(0, this.limit - this.used)
   }
 
   /** Ask whether she may speak now. With `commit: false` nothing is consumed (a dry run). */
   request(req: UtteranceRequest, opts: { commit?: boolean } = {}): BudgetDecision {
-    const now = this.opts.clock.now()
+    const now = this.time()
     this.roll(now)
     const commit = opts.commit !== false
     const deny = (reason: string): BudgetDecision => ({ allowed: false, reason, remainingToday: Math.max(0, this.limit - this.used) })

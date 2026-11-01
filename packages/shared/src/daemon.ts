@@ -327,7 +327,7 @@ export const StageLive = z.object({
   speaking: z.boolean(),
   camera: z.string().optional(),
   /** Last stage performance report (fps), if the connected stage sends one. */
-  perf: z.object({ fps: z.number(), gpuMs: z.number(), vramMb: z.number() }).optional(),
+  perf: z.object({ fps: z.number().min(0).max(10_000), gpuMs: z.number().min(0).max(1_000_000), vramMb: z.number().min(0).max(10_000_000) }).optional(),
 })
 export type StageLive = z.infer<typeof StageLive>
 

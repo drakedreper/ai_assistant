@@ -1,4 +1,6 @@
 import { homedir } from 'node:os'
+import * as nodePath from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Server } from 'node:http'
 import type { Hono } from 'hono'
 import type { AuditEntry, SettingsSnapshot, TerminalInfo } from '@ai-assistant/shared'
@@ -14,7 +16,8 @@ import { redactText } from '../store/redact'
 import { nodeCwdFs, type CwdFs } from './cwd'
 import { createTreeKiller, type TreeKiller } from './kill'
 import { nodeLaunchFs, type LaunchFs } from './launch'
-import { createNodePtyFactory, type PtyFactory } from './pty'
+import { createRealHostPtyFactory, type HostPtyFactory } from './hostClient'
+import type { PtyFactory } from './pty'
 import { registerTerminalRoutes } from './routes'
 import { TerminalService, type TerminalEvent } from './service'
 import { TicketStore } from './tickets'
@@ -71,24 +74,64 @@ export interface TerminalFeature {
   shutdown(): Promise<void>
 }
 
+/** The daemon's own install folders (the workspace root and the daemon package): kept out of a terminal's NODE_PATH. */
+function daemonRoots(): string[] {
+  const here = nodePath.dirname(fileURLToPath(import.meta.url))
+  return [nodePath.resolve(here, '..', '..'), nodePath.resolve(here, '..', '..', '..', '..')]
+}
+
 export function createTerminalFeature(d: TerminalFeatureDeps): TerminalFeature {
   const o = d.overrides ?? {}
   const platform = o.platform ?? process.platform
   const limits = d.config.terminals
   const enabled = (): boolean => d.store.kvGet<boolean>(KV.terminals) === true
 
-  // Several events in one tick (a kill-all) become one snapshot.reset.
+  // Every change of the terminal list is a full `snapshot.reset` (about 170 KiB) that is kept in the event bus's 2000-event
+  // replay ring and sent to every /ws client, so a loop of create and close would fill the ring with snapshots. Two limits:
+  //   1. several events in one tick (a kill-all) become one reset;
+  //   2. a token bucket on the resets themselves: a burst of RESET_BURST goes out at once (ordinary use never notices), after
+  //      that one reset per RESET_EVERY_MS, and everything that happens meanwhile is coalesced into ONE trailing reset (so the
+  //      last state is always published). The bucket runs on the real clock, not the injected one.
+  // What this does not do: the ring still holds up to 2000 snapshots in the worst case. Removing that needs a small
+  // `terminals.update` event (packages/shared) or a ring-exempt marker in the bus: see the README, "Known limits".
+  const RESET_BURST = 20
+  const RESET_EVERY_MS = 1000
   let resetQueued = false
+  let resetTokens = RESET_BURST
+  let resetRefilledAt = Date.now()
+  let trailing: ReturnType<typeof setTimeout> | undefined
+  const publishReset = (): void => {
+    try {
+      d.announceReset()
+    } catch {
+      /* the daemon is stopping */
+    }
+  }
+  const refillResets = (): void => {
+    const t = Date.now()
+    resetTokens = Math.min(RESET_BURST, resetTokens + (t - resetRefilledAt) / RESET_EVERY_MS)
+    resetRefilledAt = t
+  }
   const scheduleReset = (): void => {
     if (resetQueued) return
     resetQueued = true
     queueMicrotask(() => {
       resetQueued = false
-      try {
-        d.announceReset()
-      } catch {
-        /* the daemon is stopping */
+      if (trailing !== undefined) return // one is already on its way: it will carry the latest state
+      refillResets()
+      if (resetTokens >= 1) {
+        resetTokens -= 1
+        publishReset()
+        return
       }
+      const wait = Math.max(50, Math.ceil((1 - resetTokens) * RESET_EVERY_MS))
+      trailing = setTimeout(() => {
+        trailing = undefined
+        refillResets()
+        resetTokens = Math.max(0, resetTokens - 1)
+        publishReset()
+      }, wait)
+      trailing.unref()
     })
   }
 
@@ -120,7 +163,8 @@ export function createTerminalFeature(d: TerminalFeatureDeps): TerminalFeature {
         break
       case 'closed': {
         const text = { user: 'Closed a terminal', idle: 'Closed an idle terminal', disabled: 'Closed a terminal (terminals switched off)', shutdown: 'Closed a terminal (daemon stopping)' }[e.reason]
-        audit({ actor: e.reason === 'idle' || e.reason === 'shutdown' ? 'job' : 'you', action: text, target: label(e.info), outcome: 'auto' })
+        // Processes of the terminal that could not be ended are said so (a count, never a name or a command line).
+        audit({ actor: e.reason === 'idle' || e.reason === 'shutdown' ? 'job' : 'you', action: text, target: label(e.info), outcome: 'auto', ...(e.survivors ? { detail: `${e.survivors} process(es) could not be ended` } : {}) })
         break
       }
       case 'refused':
@@ -132,6 +176,12 @@ export function createTerminalFeature(d: TerminalFeatureDeps): TerminalFeature {
     scheduleReset()
   }
 
+  const killer = o.killer ?? createTreeKiller({ platform, systemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT })
+  // Every terminal runs in its OWN PTY host process (src/terminal/ptyHost.ts): node-pty is never loaded in the daemon, so one
+  // terminal's master descriptor can never be inherited by another's programs, and the host ends its tree if the daemon dies.
+  // If a host vanishes with its program still running, the daemon ends that program's orphaned family itself.
+  const hosts: HostPtyFactory | undefined = o.ptyFactory ? undefined : createRealHostPtyFactory({ onLost: (pid) => void killer.forceKill(pid).catch(() => undefined), log: d.log, graceMs: limits.killGraceMs })
+
   const service = new TerminalService({
     limits,
     platform,
@@ -139,8 +189,9 @@ export function createTerminalFeature(d: TerminalFeatureDeps): TerminalFeature {
     home: o.home ?? homedir(),
     cwdFs: o.cwdFs ?? nodeCwdFs,
     launchFs: o.launchFs ?? nodeLaunchFs,
-    ptyFactory: o.ptyFactory ?? createNodePtyFactory(platform),
-    killer: o.killer ?? createTreeKiller({ platform, systemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT }),
+    ptyFactory: o.ptyFactory ?? (hosts as HostPtyFactory).create,
+    killer,
+    daemonRoots: daemonRoots(),
     clock: d.clock,
     newId: d.newId,
     ...(o.scheduler ? { scheduler: o.scheduler } : {}),
@@ -153,7 +204,7 @@ export function createTerminalFeature(d: TerminalFeatureDeps): TerminalFeature {
   service.start()
 
   const tickets = new TicketStore({ ttlMs: limits.ticketTtlMs, now: d.clock })
-  const upgrade = createTerminalUpgrade({ security: d.security, service, tickets, limits, log: d.log, originAllowed: (o) => originAllowed(o), ...(o.heartbeatMs ? { heartbeatMs: o.heartbeatMs } : {}) })
+  const upgrade = createTerminalUpgrade({ security: d.security, service, tickets, limits, log: d.log, now: d.clock, originAllowed: (o) => originAllowed(o), ...(o.heartbeatMs ? { heartbeatMs: o.heartbeatMs } : {}) })
 
   if (limits.claudeCommandOverride) d.log.warn('TERMINAL_CLAUDE_COMMAND is set: "Claude" terminals run that command instead of your claude (test setting)')
 
@@ -195,8 +246,12 @@ export function createTerminalFeature(d: TerminalFeatureDeps): TerminalFeature {
       process.on('exit', exitKill)
     },
     async shutdown() {
+      if (trailing !== undefined) clearTimeout(trailing)
+      trailing = undefined
       process.off('exit', exitKill)
       await service.shutdown()
+      // Every terminal is ended; wait for its host process to leave too, so none is left behind when the daemon returns.
+      await hosts?.shutdown()
       tickets.clear()
       await upgrade.close()
     },

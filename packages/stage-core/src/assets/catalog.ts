@@ -1,6 +1,7 @@
 import type { Asset, AssetKind, RigFamily, WardrobeSlot } from '@ai-assistant/shared'
-import { AssetManifest } from './manifest'
+import { AssetManifest, MAX_MANIFEST_CHARS } from './manifest'
 import type { AssetManifestInput } from './manifest'
+import { checkOpaqueParams, exposesGovernedRole } from '../characters/adult-policy'
 import { canUse } from './license'
 import type { UseDecision, UseIntent, UseOptions } from './license'
 import { validateLocator, validateThumbnail } from './locator'
@@ -41,14 +42,29 @@ export interface AssetCatalogOptions extends LocatorOptions {}
 
 export type AddCode = 'invalid_manifest' | 'unsafe_locator' | 'duplicate'
 
+export interface AddOptions {
+  /** Replace an entry with the same id (the entry then loses any vetting it had unless `vetted` is set again). */
+  replace?: boolean
+  /**
+   * The OWNER of the catalog vouches for this entry (the daemon vets its own seed, nothing a user or a manifest on disk
+   * can ask for). A vetted entry may be picked as the default clothed baseline, and is exempt from the rules that exist
+   * because nobody has looked at it: opaque scalar parameters within -1..1, and a character base that exposes at least
+   * one governed parameter. A manifest cannot vet itself: there is no field for it.
+   */
+  vetted?: boolean
+}
+
 const MAX_JSON_BYTES = 256 * 1024
+/** More manifests than this in one directory load are not read (a hostile reader could list millions). */
+const MAX_DIRECTORY_ENTRIES = 5000
 
 export class AssetCatalog {
   private readonly assets = new Map<string, AssetManifest>()
+  private readonly vettedIds = new Set<string>()
   constructor(private readonly options: AssetCatalogOptions = {}) {}
 
   /** Validate and add one manifest. A duplicate id is refused unless `replace` is set. */
-  add(input: unknown, opts: { replace?: boolean } = {}): Result<AssetManifest, AddCode> {
+  add(input: unknown, opts: AddOptions = {}): Result<AssetManifest, AddCode> {
     const parsed = AssetManifest.safeParse(input)
     if (!parsed.success) {
       const first = parsed.error.issues[0]
@@ -56,20 +72,36 @@ export class AssetCatalog {
       return fail('invalid_manifest', `${where}${first?.message ?? 'invalid manifest'}`)
     }
     const m = parsed.data
+    if (JSON.stringify(m).length > MAX_MANIFEST_CHARS) return fail('invalid_manifest', `manifest of "${m.id}" is too large (the limit is ${MAX_MANIFEST_CHARS} characters of JSON)`)
     const loc = validateLocator(m.locator, this.options)
     if (!loc.ok) return fail('unsafe_locator', `locator of "${m.id}": ${loc.reason}`)
     if (m.thumbnail !== undefined) {
       const th = validateThumbnail(m.thumbnail, this.options)
       if (!th.ok) return fail('unsafe_locator', `thumbnail of "${m.id}": ${th.reason}`)
     }
+    // what an asset nobody vouched for must satisfy on top of the manifest rules (see AddOptions.vetted)
+    if (opts.vetted !== true) {
+      const unvetted = checkOpaqueParams(m.params)
+      if (m.kind === 'character_base' && !exposesGovernedRole(m.params)) {
+        unvetted.push('a character base must expose at least one governed parameter (face.apparent_age, body.height_cm, ...) or the adult envelope cannot judge it; only an asset vetted by the owner of the catalog is exempt')
+      }
+      if (unvetted.length > 0) return fail('invalid_manifest', `params: ${unvetted[0]}`)
+    }
     if (this.assets.has(m.id) && !opts.replace) return fail('duplicate', `asset "${m.id}" already exists`)
     const stored: AssetManifest = structuredClone({ ...m, locator: loc.normalized })
     this.assets.set(m.id, stored)
+    if (opts.vetted === true) this.vettedIds.add(m.id)
+    else this.vettedIds.delete(m.id)
     return ok(structuredClone(stored))
   }
 
+  /** Did the owner of the catalog vouch for this entry? (Vetting is state of the catalog, never of the manifest.) */
+  isVetted(id: string): boolean {
+    return this.vettedIds.has(id) && this.assets.has(id)
+  }
+
   /** Add many; never throws, reports each rejection. */
-  addMany(list: readonly unknown[], opts: { replace?: boolean } = {}): LoadReport {
+  addMany(list: readonly unknown[], opts: AddOptions = {}): LoadReport {
     const report: LoadReport = { added: [], rejected: [] }
     list.forEach((item, i) => {
       const r = this.add(item, opts)
@@ -82,22 +114,44 @@ export class AssetCatalog {
     return report
   }
 
-  /** Load manifests through an injected reader (asset.json per asset). Bad JSON or bad manifests are reported, not thrown. */
-  async loadFromDirectory(reader: AssetDirectoryReader, opts: { replace?: boolean } = {}): Promise<LoadReport> {
+  /**
+   * Load manifests through an injected reader (asset.json per asset). Bad JSON or bad manifests are reported, not thrown,
+   * and so is a reader that misbehaves (a list that is not a list, a path that is not text, something that is not text where
+   * a manifest should be, a read that throws, millions of entries).
+   */
+  async loadFromDirectory(reader: AssetDirectoryReader, opts: AddOptions = {}): Promise<LoadReport> {
     const report: LoadReport = { added: [], rejected: [] }
     let paths: string[]
     try {
-      paths = [...(await reader.list())].sort()
+      const listed: unknown = await reader.list()
+      if (!Array.isArray(listed)) {
+        report.rejected.push({ source: '(list)', reason: 'the reader did not return a list of manifests' })
+        return report
+      }
+      paths = []
+      for (const p of listed as unknown[]) {
+        if (typeof p === 'string') paths.push(p)
+        else report.rejected.push({ source: '(list)', reason: 'a manifest path that is not text was ignored' })
+      }
+      paths.sort()
     } catch (e) {
-      report.rejected.push({ source: '(list)', reason: `could not list manifests: ${(e as Error).message}` })
+      report.rejected.push({ source: '(list)', reason: `could not list manifests: ${errorText(e)}` })
       return report
     }
+    if (paths.length > MAX_DIRECTORY_ENTRIES) {
+      report.rejected.push({ source: '(list)', reason: `${paths.length} manifests listed; only the first ${MAX_DIRECTORY_ENTRIES} are read` })
+      paths = paths.slice(0, MAX_DIRECTORY_ENTRIES)
+    }
     for (const path of paths) {
-      let text: string
+      let text: unknown
       try {
         text = await reader.read(path)
       } catch (e) {
-        report.rejected.push({ source: path, reason: `could not read: ${(e as Error).message}` })
+        report.rejected.push({ source: path, reason: `could not read: ${errorText(e)}` })
+        continue
+      }
+      if (typeof text !== 'string') {
+        report.rejected.push({ source: path, reason: 'the reader returned something that is not text' })
         continue
       }
       if (text.length > MAX_JSON_BYTES) {
@@ -128,6 +182,7 @@ export class AssetCatalog {
   }
 
   remove(id: string): boolean {
+    this.vettedIds.delete(id)
     return this.assets.delete(id)
   }
 
@@ -183,10 +238,12 @@ export class AssetCatalog {
   }
 }
 
-export function createAssetCatalog(options: AssetCatalogOptions = {}, initial: readonly AssetManifestInput[] = []): AssetCatalog {
+const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e)).slice(0, 160)
+
+export function createAssetCatalog(options: AssetCatalogOptions = {}, initial: readonly AssetManifestInput[] = [], extra: Pick<AddOptions, 'vetted'> = {}): AssetCatalog {
   const c = new AssetCatalog(options)
   if (initial.length > 0) {
-    const report = c.addMany(initial)
+    const report = c.addMany(initial, extra)
     if (report.rejected.length > 0) {
       throw new Error(`createAssetCatalog: ${report.rejected.length} initial asset(s) rejected: ${report.rejected.map((r) => `${r.source} (${r.reason})`).join('; ')}`)
     }

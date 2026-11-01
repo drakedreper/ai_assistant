@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { ServerEvent, STAGE_TOOL_SURFACE, TOOL_SURFACE, type ServerEvent as ServerEventT } from '@ai-assistant/shared'
 import { decodeFrame, utteranceIdHash } from '@ai-assistant/stage-core'
 import { connectSimulator, type SimClient } from '../src/stage/simClient'
-import { makeStageDaemon, sleep, until, type StageDaemon } from '../src/stage/testing'
+import { daytimeClock, makeStageDaemon, sleep, until, type StageDaemon, type StageDaemonOptions } from '../src/stage/testing'
 
 /**
  * The whole chain with nothing faked except the model and the engine: the REAL Secretary lane (zero-token fake Claude
@@ -22,10 +22,10 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-async function boot(): Promise<{ d: StageDaemon; events: ServerEventT[] }> {
+async function boot(extra: Partial<StageDaemonOptions> = {}): Promise<{ d: StageDaemon; events: ServerEventT[] }> {
   const dir = mkdtempSync(join(tmpdir(), 'stage-wire-'))
   dirs.push(dir)
-  const d = await makeStageDaemon({ dataDir: dir, db: 'app.db' })
+  const d = await makeStageDaemon({ dataDir: dir, db: 'app.db', ...extra })
   daemons.push(d)
   const events: ServerEventT[] = []
   d.daemon.bus.subscribe((e) => void events.push(e))
@@ -184,7 +184,9 @@ describe('a reply becomes a performance on the stage', () => {
 
 describe('the behaviour loop runs on a timer and feeds the stage and the dashboards', () => {
   it('idle profile, posture, gaze and affect arrive by themselves; the dashboards get stage.live', async () => {
-    const { d, events } = await boot()
+    // The director sleeps during the persona's quiet hours (22:30 to 07:00 local). The daemon's clock is pinned to 10:00 local,
+    // running at real speed, so this test does not depend on the hour or the time zone it runs in.
+    const { d, events } = await boot({ clock: daytimeClock(10) })
     const c = track(d.connect({ reconnect: false }))
     const sim = await c.waitConnected()
     await until('ready', () => d.hub.isConnected())

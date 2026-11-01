@@ -3,6 +3,10 @@ import type { IPty } from 'node-pty'
 /**
  * The seam between the terminal service and node-pty. The service only ever sees `PtyLike`, so unit tests use a fake
  * and a few integration tests use the real thing (ConPTY on Windows, forkpty elsewhere).
+ *
+ * In the daemon, node-pty is NEVER loaded in the daemon process: every terminal runs in its own PTY host process
+ * (src/terminal/ptyHost.ts) that owns exactly one master descriptor, and the service talks to it through the
+ * `PtyLike` that src/terminal/hostClient.ts returns. `createNodePtyFactory` is what that host process uses.
  */
 
 export interface PtySpawnSpec {
@@ -24,6 +28,9 @@ export interface PtyLike {
   resize(cols: number, rows: number): void
   /** Ask the pty to end (SIGHUP on POSIX; the process on Windows). Tree killing is the TreeKiller's job. */
   kill(): void
+  /** Flow control: stop reading output (the child then blocks on a full buffer) and carry on. Optional. */
+  pause?(): void
+  resume?(): void
 }
 
 export type PtyFactory = (spec: PtySpawnSpec) => PtyLike | Promise<PtyLike>
@@ -52,6 +59,12 @@ class NodePtyAdapter implements PtyLike {
   }
   kill(): void {
     this.p.kill()
+  }
+  pause(): void {
+    this.p.pause()
+  }
+  resume(): void {
+    this.p.resume()
   }
 }
 

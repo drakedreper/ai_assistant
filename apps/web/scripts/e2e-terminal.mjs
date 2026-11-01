@@ -20,6 +20,18 @@
  *   - switching terminals off in Settings kills every running terminal, empties the list and closes the sockets;
  *   - the daemon stops without leaving a terminal process behind.
  *
+ * And, for the findings of the adversarial review (each a check below):
+ *   - pairing: the sign-in link carries a second secret in its #fragment; the page takes it out of the address bar, a browser
+ *     without it (or a program replaying a stolen cookie) cannot use a terminal, and the tab says so;
+ *   - every terminal runs in its own PTY host process: no program of a later terminal holds an earlier terminal's PTY master;
+ *   - closing a terminal ends its WHOLE tree (background jobs, nohup, subshell jobs, programs that ignore SIGHUP), also when the
+ *     daemon is stopped, hung up (SIGHUP), or killed with SIGKILL; only a process that deliberately daemonised itself survives;
+ *   - programs inside a terminal cannot make the page open a link without a confirmation that shows the real address;
+ *   - signing out and the revoke command end sessions; the data folder and database are private (POSIX);
+ *   - the daemon's loader variables (NODE_PATH, NODE_OPTIONS code-loading flags) do not reach a terminal;
+ *   - a flood of text frames closes the socket (4429);
+ *   - the live feed (/ws) read from a dev origin carries nothing about terminals (no list, no audit entry with an id).
+ *
  * Options (environment):
  *   SHOTS_DIR     where screenshots go (default ./screenshots)
  *   SKIP_BUILD=1  do not rebuild apps/web even if dist looks stale
@@ -30,13 +42,13 @@
  * script uses PowerShell syntax for the shell command; it has only been run in the Linux sandbox so far.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const require = createRequire(import.meta.url)
 const { chromium } = require('playwright')
@@ -105,7 +117,7 @@ function freePort() {
   })
 }
 
-const maskCode = (s) => s.replace(/code=[\w-]+/g, 'code=***')
+const maskCode = (s) => s.replace(/code=[\w-]+/g, 'code=***').replace(/#tp=[\w-]+/g, '#tp=***')
 const alive = (pid) => {
   try {
     process.kill(pid, 0)
@@ -113,6 +125,43 @@ const alive = (pid) => {
   } catch {
     return false
   }
+}
+
+/** Live (not zombie) processes whose whole command line is exactly this. Linux only. */
+function runningCmd(cmdline) {
+  if (WIN) return []
+  const out = []
+  for (const name of readdirSync('/proc')) {
+    if (!/^\d+$/.test(name)) continue
+    try {
+      const cmd = readFileSync(`/proc/${name}/cmdline`, 'latin1').split('\0').filter(Boolean).join(' ')
+      if (cmd !== cmdline) continue
+      const stat = readFileSync(`/proc/${name}/stat`, 'latin1')
+      const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3)
+      if (state !== 'Z' && state !== 'X') out.push(Number(name))
+    } catch {
+      /* vanished while being read */
+    }
+  }
+  return out
+}
+const killCmd = (cmdline) => runningCmd(cmdline).forEach((pid) => { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } })
+/** The PTY host processes (children of this daemon whose command line names ptyHost). */
+function hostsOf(daemonPid) {
+  if (WIN) return []
+  const out = []
+  for (const name of readdirSync('/proc')) {
+    if (!/^\d+$/.test(name)) continue
+    try {
+      const stat = readFileSync(`/proc/${name}/stat`, 'latin1')
+      const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1])
+      if (ppid !== daemonPid) continue
+      if (readFileSync(`/proc/${name}/cmdline`, 'latin1').includes('ptyHost')) out.push(Number(name))
+    } catch {
+      /* vanished */
+    }
+  }
+  return out
 }
 
 const daemons = new Set()
@@ -135,10 +184,12 @@ async function startDaemon({ port, dataDir, env: extra }) {
     'the daemon to print its sign-in link',
     () => {
       if (d.exited) throw new Error(`the daemon exited early:\n${maskCode(d.out).slice(-1500)}`)
-      return /Sign in\s+(http:\/\/127\.0\.0\.1:\d+\/\?code=[\w-]+)/.exec(d.out)?.[1]
+      return /Sign in\s+(http:\/\/127\.0\.0\.1:\d+\/\?code=[\w-]+(?:#[\w=&-]+)?)/.exec(d.out)?.[1]
     },
     { timeout: 40_000 },
   )
+  d.proof = /#tp=([\w-]+)/.exec(d.exchangeUrl)?.[1]
+  proofs.set(port, d.proof)
   return d
 }
 
@@ -151,9 +202,16 @@ async function stopDaemon(d, signal = 'SIGTERM') {
   daemons.delete(d)
 }
 
-function raw({ port, method = 'GET', url = '/', headers = {}, body }) {
+/** The terminal pairing proof of each daemon, by port: the part after "#tp=" of the sign-in link it printed. */
+const proofs = new Map()
+const isTerminalRoute = (url) => /^\/api\/(?:terminals|settings\/terminals)(?:[/?]|$)/.test(url)
+
+/** `noProof: true` plays a client that does not have the pairing (a program replaying a stolen cookie). */
+function raw({ port, method = 'GET', url = '/', headers = {}, body, noProof = false }) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, method, path: url, headers, timeout: 8000 }, (res) => {
+    const sent = { ...headers }
+    if (!noProof && isTerminalRoute(url) && proofs.get(port) && sent['X-Terminal-Proof'] === undefined) sent['X-Terminal-Proof'] = proofs.get(port)
+    const req = http.request({ host: '127.0.0.1', port, method, path: url, headers: sent, timeout: 8000 }, (res) => {
       const chunks = []
       res.on('data', (c) => chunks.push(c))
       res.on('end', () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8'), headers: res.headers }))
@@ -252,6 +310,7 @@ setInterval(() => {}, 1000)
 `,
   )
 
+  writeFileSync(path.join(tmp, 'noop-loader.cjs'), '// the daemon launcher\'s loader (a stand-in): harmless, and must never reach a terminal\n')
   const port = await freePort()
   d1 = await startDaemon({
     port,
@@ -264,6 +323,10 @@ setInterval(() => {}, 1000)
       // Planted secrets: they must never reach a terminal (the shell test below prints its environment).
       AI_ASSISTANT_HOOK_TOKEN: 'E2E-PLANTED-HOOK-TOKEN-0123456789ABCDEF',
       STAGE_TOKEN: 'E2E-PLANTED-STAGE-TOKEN',
+      // The daemon's launcher: a pnpm-shim style NODE_PATH next to the user's own entry, and NODE_OPTIONS with a harmless
+      // code-loading flag next to a flag that is the user's own. The terminal must get the user's parts only.
+      NODE_PATH: `${path.join(root, 'node_modules', '.pnpm', 'e2e-launcher@1', 'node_modules')}${path.delimiter}${path.join(tmp, 'user-modules')}`,
+      NODE_OPTIONS: `--require ${path.join(tmp, 'noop-loader.cjs')} --max-old-space-size=1024`,
     },
   })
   log(`daemon up on 127.0.0.1:${port} (data dir ${dataDir})`)
@@ -301,7 +364,9 @@ setInterval(() => {}, 1000)
   const apiFetch = (method, url, body) =>
     page.evaluate(
       async ({ method, url, body }) => {
-        const r = await fetch(url, { method, headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+        // the page's own stored pairing proof (taken from the sign-in link by terminalClient.ts), on terminal routes only
+        const proof = /^\/api\/(?:terminals|settings\/terminals)(?:[/?]|$)/.test(url) ? localStorage.getItem('aia.terminalProof') : null
+        const r = await fetch(url, { method, headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(proof ? { 'X-Terminal-Proof': proof } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
         const text = await r.text()
         let json
         try {
@@ -565,6 +630,35 @@ setInterval(() => {}, 1000)
     const noCookie = await openTerminalSocket({ port, id: spareB, origin, cookie: null }).then(() => null, (e) => e)
     if (!noCookie || noCookie.status !== 401) throw new Error(`a socket without the cookie answered ${noCookie?.status}`)
   })
+  await check('the live feed (/ws) read from a dev origin carries nothing about terminals: no list, no audit entry with an id; the daemon\'s own origin sees them', async () => {
+    const snap = await raw({ port, method: 'GET', url: '/api/snapshot', headers: { Origin: origin, Cookie: cookie } })
+    const epoch = String(snap.headers['x-daemon-epoch'] ?? '')
+    if (snap.status !== 200 || !epoch) throw new Error(`snapshot ${snap.status}, epoch ${epoch || 'missing'}`)
+    // The replay of everything since the start of the daemon (or, when the ring no longer reaches back, a fresh snapshot.reset): the audit log is full of terminals by now.
+    const feedText = (o) =>
+      new Promise((resolve, reject) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?since=0&epoch=${epoch}`, { headers: { Origin: o, Cookie: cookie } })
+        const texts = []
+        ws.on('message', (d, bin) => {
+          if (!bin) texts.push(d.toString())
+        })
+        ws.once('error', reject)
+        ws.once('open', () =>
+          setTimeout(() => {
+            ws.close()
+            resolve(texts)
+          }, 1200),
+        )
+      })
+    const TERM_ID = /\bterm-[a-z0-9]+-[a-z0-9]+-[0-9a-f]{4}\b/ // the daemon's terminal ids (the hook session of this script is called e2e-term-sess)
+    const own = (await feedText(origin)).join('\n')
+    if (!TERM_ID.test(own)) throw new Error('the own-origin feed shows no terminal id either, so this check would prove nothing')
+    for (const dev of ['http://127.0.0.1:5173', 'http://localhost:5173']) {
+      const text = (await feedText(dev)).join('\n')
+      if (!/snapshot\.reset|settings\.update/.test(text)) throw new Error(`${dev}: the feed carried no snapshot or settings event, so there was nothing to check`)
+      if (TERM_ID.test(text) || /Opened a terminal|Closed (?:an idle |a )?terminal|Refused to open a terminal|A terminal exited|Turned embedded terminals|(?:shell|claude) terminal/i.test(text)) throw new Error(`${dev}: the feed mentions a terminal: ${(/.{40}(?:\bterm-[a-z0-9]+-|terminal ).{40}/i.exec(text) ?? [''])[0]}`)
+    }
+  })
   await check('a socket that never sends the auth frame is closed (about 5 seconds)', async () => {
     const h = await openTerminalSocket({ port, id: spareB, origin, cookie })
     const started = Date.now()
@@ -619,6 +713,228 @@ setInterval(() => {}, 1000)
     await until('the row to disappear', async () => (await page.locator('[data-terminal-kind="claude"]').count()) === 0, { timeout: 10_000 })
     pidsToReap.delete(pid)
     return `pid ${pid} gone`
+  })
+
+
+  // ---------------------------------------------------------------- 8b. the adversarial review's findings
+  log('\n-- pairing, descriptors, process trees, links, the loader environment')
+
+  /** Every terminal except the UI's own shell goes: each check below starts from the same clean state. */
+  const dropExtras = async () => {
+    for (const t of await listApi()) if (t.id !== shellId) await raw({ port, method: 'DELETE', url: `/api/terminals/${t.id}`, headers: { Origin: origin, Cookie: cookie } })
+  }
+  await dropExtras()
+  const nodeShell = async () => {
+    const r = await raw({ port, method: 'POST', url: '/api/terminals', headers: { 'Content-Type': 'application/json', Origin: origin, Cookie: cookie }, body: JSON.stringify({ kind: 'shell' }) })
+    if (r.status !== 201) throw new Error(`create answered ${r.status} ${r.text.slice(0, 100)}`)
+    const id = JSON.parse(r.text).id
+    const h = await openTerminalSocket({ port, id, origin, cookie })
+    h.ws.send(JSON.stringify({ type: 'auth', ticket: await ticketFor(id) }))
+    await until('the shell to be ready', async () => h.text.some((m) => m.type === 'ready'))
+    h.id = id
+    h.screen = () => Buffer.concat(h.bin).toString('utf8')
+    h.type = (t) => h.ws.send(Buffer.from(`${t}\r`))
+    h.remove = () => raw({ port, method: 'DELETE', url: `/api/terminals/${id}`, headers: { Origin: origin, Cookie: cookie } })
+    return h
+  }
+
+  await check('the page took the pairing proof out of the address bar and keeps it for this origin only', async () => {
+    const hash = new URL(page.url()).hash
+    if (/tp=/.test(page.url()) || hash !== '') throw new Error(`the address bar still has it: ${page.url().replace(/code=[\w-]+/, 'code=***')}`)
+    const stored = await page.evaluate(() => localStorage.getItem('aia.terminalProof'))
+    if (!d1.proof || stored !== d1.proof) throw new Error('the page did not keep the proof it was handed in the sign-in link')
+  })
+  await check('a program replaying the session cookie WITHOUT the pairing cannot start a terminal, mint a ticket or switch terminals on', async () => {
+    const stolen = cookie
+    const h = { 'Content-Type': 'application/json', Origin: origin, Cookie: stolen }
+    const must401 = async (label, args) => {
+      const r = await raw({ port, noProof: true, ...args })
+      if (r.status !== 401 || !/terminal_proof_required/.test(r.text)) throw new Error(`${label}: answered ${r.status} ${r.text.slice(0, 80)}`)
+    }
+    await must401('list', { method: 'GET', url: '/api/terminals', headers: h })
+    await must401('create', { method: 'POST', url: '/api/terminals', headers: h, body: '{"kind":"shell"}' })
+    await must401('ticket', { method: 'POST', url: `/api/terminals/${shellId}/ticket`, headers: h, body: '{}' })
+    await must401('switch on', { method: 'PUT', url: '/api/settings/terminals', headers: h, body: '{"on":true}' })
+    const wrong = await raw({ port, noProof: true, method: 'GET', url: '/api/terminals', headers: { ...h, 'X-Terminal-Proof': hookToken } })
+    if (wrong.status !== 401) throw new Error(`a wrong proof answered ${wrong.status}`)
+    const right = await raw({ port, method: 'GET', url: '/api/terminals', headers: h })
+    if (right.status !== 200) throw new Error(`the right proof answered ${right.status}`)
+  })
+  await check('a browser that has the cookie but not the pairing is told how to pair, and its terminal calls are refused', async () => {
+    const sid1 = (await context.cookies()).find((c) => c.name.startsWith('aia_sid_'))
+    const ctx2 = await browser.newContext({ viewport: { width: 1300, height: 900 } })
+    try {
+      await ctx2.addCookies([{ name: sid1.name, value: sid1.value, url: origin, httpOnly: true, sameSite: 'Strict' }])
+      const p2 = await ctx2.newPage()
+      await p2.goto(`${origin}/`)
+      await p2.waitForSelector('nav[aria-label="Main"]', { timeout: 30_000 })
+      await p2.locator('nav[aria-label="Main"] button[aria-label="Work"]').click()
+      await p2.getByRole('heading', { name: 'Mission control' }).waitFor({ timeout: 10_000 })
+      await p2.getByRole('tab', { name: 'Terminal' }).click()
+      const note = p2.locator('[data-testid="terminal-unpaired"]')
+      await note.waitFor({ timeout: 10_000 })
+      if (!/not paired/i.test(await note.innerText())) throw new Error('the note does not say the browser is not paired')
+      await p2.getByRole('button', { name: 'New shell' }).click()
+      const err = p2.locator('[data-testid="terminal-error"]')
+      await err.waitFor({ timeout: 10_000 })
+      const text = await err.innerText()
+      if (!/not paired/i.test(text) || /signed out/i.test(text)) throw new Error(`error copy: ${text.slice(0, 120)}`)
+      if ((await raw({ port, method: 'GET', url: '/api/terminals', headers: { Origin: origin, Cookie: cookie } })).status !== 200) throw new Error('the paired browser was affected')
+    } finally {
+      await ctx2.close()
+    }
+  })
+
+  await check(WIN ? 'every terminal runs in its own PTY host (skipped on Windows: not verified there)' : 'a shell opened after another holds NO PTY master descriptor (each terminal runs in its own PTY host process)', async () => {
+    if (WIN) return 'skipped'
+    await dropExtras()
+    const a = await nodeShell()
+    const b = await nodeShell()
+    const c = await nodeShell()
+    b.type('echo MASTERS-$(ls -l /proc/$$/fd | grep -c ptmx)-END')
+    c.type('echo MASTERS-$(ls -l /proc/$$/fd | grep -c ptmx)-END')
+    for (const t of [b, c]) {
+      const n = await until('the descriptor count', async () => /MASTERS-(\d+)-END/.exec(t.screen())?.[1])
+      if (n !== '0') throw new Error(`a later shell sees ${n} PTY master descriptor(s)`)
+    }
+    // the daemon process itself holds none either, and every host holds exactly its own
+    const own = (pid) => readdirSync(`/proc/${pid}/fd`).filter((f) => { try { return readlinkSync(`/proc/${pid}/fd/${f}`) === '/dev/ptmx' } catch { return false } }).length
+    if (own(d1.child.pid) !== 0) throw new Error('the daemon holds a PTY master')
+    const hosts = hostsOf(d1.child.pid)
+    if (hosts.length < 3) throw new Error(`only ${hosts.length} PTY host processes`)
+    for (const hpid of hosts) if (own(hpid) !== 1) throw new Error(`host ${hpid} holds ${own(hpid)} masters`)
+    for (const t of [a, b, c]) await t.remove()
+    return `${hosts.length} hosts, one master each`
+  })
+
+  await check(WIN ? 'closing a terminal ends its whole tree (skipped on Windows: not verified there)' : 'closing a terminal ends its WHOLE tree: background, nohup, subshell and HUP-ignoring jobs die with it', async () => {
+    if (WIN) return 'skipped'
+    const leaves = [424201, 424202, 424203, 424204, 424205]
+    leaves.forEach((n) => killCmd(`sleep ${n}`))
+    await dropExtras()
+    const t = await nodeShell()
+    t.type('sleep 424201 &')
+    t.type('nohup sleep 424202 >/dev/null 2>&1 &')
+    t.type('(sleep 424203 &)')
+    t.type("trap '' HUP; sleep 424204 &")
+    t.type(`sh -c 'trap "" HUP TERM INT; sleep 424205' &`)
+    try {
+      await until('the jobs to run', async () => leaves.every((n) => runningCmd(`sleep ${n}`).length > 0), { timeout: 15_000 })
+      const started = Date.now()
+      const del = await t.remove()
+      if (del.status !== 204) throw new Error(`DELETE answered ${del.status}`)
+      await until('every job to be gone', async () => leaves.every((n) => runningCmd(`sleep ${n}`).length === 0), { timeout: 10_000 })
+      return `all ${leaves.length} gone ${((Date.now() - started) / 1000).toFixed(1)} s after the close`
+    } finally {
+      leaves.forEach((n) => killCmd(`sleep ${n}`))
+    }
+  })
+
+  await check('the terminal tab says what it keeps (shell history is the shell\'s own) and the daemon\'s loader variables do not reach the shell', async () => {
+    await openTerminalTab()
+    const note = await page.locator('[data-testid="terminal-tab"] [role="note"]').first().innerText()
+    if (!/history file/i.test(note) || !/own records|keep their own/i.test(note)) throw new Error(`note: ${note.slice(0, 160)}`)
+    if (/never written to disk, logged, or shown/i.test(note)) throw new Error('the old over-claim is still there')
+    await dropExtras()
+    const t = await nodeShell()
+    t.type('echo NP-[$NODE_PATH]-NP; echo NO-[$NODE_OPTIONS]-NO')
+    const np = await until('NODE_PATH', async () => /NP-\[([^\]$]*)\]-NP/.exec(t.screen())?.[1])
+    const no = await until('NODE_OPTIONS', async () => /NO-\[([^\]$]*)\]-NO/.exec(t.screen())?.[1])
+    await t.remove()
+    const userPath = path.join(tmp, 'user-modules')
+    if (np !== userPath) throw new Error(`NODE_PATH in the shell: ${np}`)
+    if (no !== '--max-old-space-size=1024') throw new Error(`NODE_OPTIONS in the shell: ${no}`)
+  })
+
+  await check('a flood of text frames closes the socket with 4429 and the terminal keeps running', async () => {
+    await dropExtras()
+    const t = await nodeShell()
+    for (let i = 0; i < 400; i++) t.ws.send(JSON.stringify({ type: 'resize', cols: 80 + (i % 2), rows: 24 }))
+    const info = await t.closed
+    if (info.code !== 4429) throw new Error(`close code ${info.code}`)
+    const listed = (await listApi()).find((x) => x.id === t.id)
+    if (listed?.state !== 'running') throw new Error('the terminal did not survive the flood')
+    await t.remove()
+  })
+
+  await check('a link a program prints (OSC 8) is only opened after a confirmation that shows the real address, and with noopener', async () => {
+    await openTerminalTab()
+    const row = page.locator(`[data-terminal-id="${shellId}"]`)
+    await row.getByRole('button', { name: /^Open |^Show/ }).first().click()
+    await waitLive()
+    const dialogs = []
+    let answer = 'dismiss'
+    const onDialog = async (dlg) => {
+      dialogs.push(dlg.message())
+      await (answer === 'accept' ? dlg.accept() : dlg.dismiss()).catch(() => undefined)
+    }
+    page.on('dialog', onDialog)
+    const popups = []
+    const onPage = (p) => popups.push(p)
+    context.on('page', onPage)
+    try {
+      await page.evaluate(() => {
+        const original = window.open
+        window.__opens = []
+        window.open = (...a) => (window.__opens.push(a.map(String)), original.apply(window, a))
+      })
+      const link = (url, text) => `printf '\\033]8;;${url}\\033\\\\${text}\\033]8;;\\033\\\\\\n'`
+      await typeLine(link('https://example.invalid/phish?x=1', 'CLICKME-OK'))
+      await typeLine(link('https://github.com@evil.example/login', 'CLICKME-USERINFO'))
+      await typeLine(link('javascript:window.__pwned=1', 'CLICKME-JS'))
+      await waitScreen(/CLICKME-JS/, 'the links to be printed')
+      const clickText = async (text) => {
+        const box = await hostLocator().locator('.xterm-rows > div', { hasText: text }).last().boundingBox()
+        if (!box) throw new Error(`no row with ${text}`)
+        await page.mouse.move(box.x + 30, box.y + box.height / 2)
+        await sleep(250)
+        await page.mouse.click(box.x + 30, box.y + box.height / 2)
+        await sleep(700)
+      }
+      // 1. a plain https link: a confirmation naming the real address; "no" opens nothing
+      await clickText('CLICKME-OK')
+      if (dialogs.length !== 1) throw new Error(`${dialogs.length} dialogs for the first click`)
+      if (!/A program in this terminal printed a link/.test(dialogs[0]) || !dialogs[0].includes('https://example.invalid/phish?x=1')) throw new Error(`dialog: ${dialogs[0].slice(0, 200)}`)
+      if (/Do you want to navigate to/.test(dialogs[0])) throw new Error('xterm.js\'s own confirmation was used')
+      if (popups.length !== 0 || (await page.evaluate(() => window.__opens.length)) !== 0) throw new Error('the link was opened without a yes')
+      // 2. "yes": opened with noopener and noreferrer, to exactly that address
+      answer = 'accept'
+      await clickText('CLICKME-OK')
+      const opens = await page.evaluate(() => window.__opens)
+      if (opens.length !== 1 || opens[0][0] !== 'https://example.invalid/phish?x=1' || !/noopener/.test(opens[0][2]) || !/noreferrer/.test(opens[0][2])) throw new Error(`window.open calls: ${JSON.stringify(opens)}`)
+      await until('the popup', async () => popups.length === 1, { timeout: 5000 })
+      await popups[0].close().catch(() => undefined)
+      // 3. a link with a user name in it, and a javascript: link: nothing is offered, nothing opens
+      const before = dialogs.length
+      await clickText('CLICKME-USERINFO')
+      await clickText('CLICKME-JS')
+      if (dialogs.length !== before) throw new Error('a refused link still raised a dialog')
+      if ((await page.evaluate(() => window.__opens.length)) !== 1) throw new Error('a refused link was opened')
+      if ((await page.evaluate(() => window.__pwned)) !== undefined) throw new Error('script ran')
+      if (!/was not opened/.test(await page.locator('[data-testid="terminal-status"]').innerText())) throw new Error('no notice about the refused link')
+    } finally {
+      page.off('dialog', onDialog)
+      context.off('page', onPage)
+    }
+  })
+
+  // Node-level checks of the link rules (the browser run above covers the wiring, these cover the cases).
+  await check('the link rules: only plain http(s) without credentials or hidden characters, shown in their punycode form', async () => {
+    const daemonRequire = createRequire(path.join(daemonDir, 'package.json'))
+    const api = await import(pathToFileURL(daemonRequire.resolve('tsx/esm/api')).href)
+    const mod = await api.tsImport(path.join(webDir, 'src', 'api', 'terminalClient.ts'), import.meta.url)
+    const ok = (u) => mod.safeLinkTarget(u)
+    if (ok('https://example.com/a?b=1#c')?.href !== 'https://example.com/a?b=1#c') throw new Error('a plain link is refused')
+    if (ok('https://аpple.com/x')?.host !== 'xn--pple-43d.com') throw new Error('a look-alike host is not shown in punycode')
+    const refused = ['javascript:alert(1)', 'data:text/html,x', 'file:///etc/passwd', 'ftp://example.com/', 'https://user:pw@example.com/', 'https://github.com@evil.example/', 'http://', '', 'not a url', `https://example.com/${'a'.repeat(2100)}`, 'https://exa\u0000mple.com/', 'https://example.com/‮evil', 'https://example.com/​x', 'https://example.com/\nx']
+    for (const u of refused) if (ok(u) !== undefined) throw new Error(`accepted ${JSON.stringify(u.slice(0, 40))}`)
+    const calls = []
+    const h = mod.createLinkHandler({ confirm: (m) => (calls.push(['confirm', m]), true), open: (href) => calls.push(['open', href]), setTitle: (t) => calls.push(['title', t]), refused: () => calls.push(['refused']) })
+    h.activate({}, 'javascript:alert(1)')
+    h.hover({}, 'https://example.com/')
+    h.leave()
+    if (JSON.stringify(calls.map((c) => c[0])) !== JSON.stringify(['refused', 'title', 'title'])) throw new Error(`calls: ${JSON.stringify(calls.map((c) => c[0]))}`)
+    if (calls[1][1] !== 'https://example.com/' || calls[2][1] !== '') throw new Error('the hover title is wrong')
   })
 
   // ---------------------------------------------------------------- 9. disabling kills everything
@@ -713,6 +1029,121 @@ setInterval(() => {}, 1000)
     await until('the terminal process to be gone after the daemon was killed', async () => !alive(pid), { timeout: 10_000 })
     pidsToReap.delete(pid)
     return `pid ${pid} gone`
+  })
+
+
+  // ---------------------------------------------------------------- 10b. lifecycle, sessions and modes (fresh daemons)
+  log('\n-- the daemon dying, signing out, revoking, private files')
+  const quick = async (name, extraEnv = {}) => {
+    const dataDirN = path.join(tmp, name)
+    const portN = await freePort()
+    const dN = await startDaemon({ port: portN, dataDir: dataDirN, env: { TERMINAL_CLAUDE_COMMAND: JSON.stringify([process.execPath, fakeClaude]), HOME: homeDir, USERPROFILE: homeDir, ...(WIN ? {} : { SHELL: '/bin/sh' }), ...extraEnv } })
+    const originN = `http://127.0.0.1:${portN}`
+    const ex = await raw({ port: portN, method: 'POST', url: '/api/auth/exchange', headers: { 'Content-Type': 'application/json', Origin: originN }, body: JSON.stringify({ code: /code=([\w-]+)/.exec(dN.exchangeUrl)[1] }) })
+    const cookieN = String(ex.headers['set-cookie']?.[0] ?? '').split(';')[0]
+    const hdr = { 'Content-Type': 'application/json', Origin: originN, Cookie: cookieN }
+    const on = await raw({ port: portN, method: 'PUT', url: '/api/settings/terminals', headers: hdr, body: '{"on":true}' })
+    if (on.status !== 200) throw new Error(`switching terminals on answered ${on.status}`)
+    const term = async (cmd) => {
+      const made = await raw({ port: portN, method: 'POST', url: '/api/terminals', headers: hdr, body: '{"kind":"shell"}' })
+      if (made.status !== 201) throw new Error(`create answered ${made.status} ${made.text.slice(0, 100)}`)
+      const id = JSON.parse(made.text).id
+      const tk = JSON.parse((await raw({ port: portN, method: 'POST', url: `/api/terminals/${id}/ticket`, headers: hdr, body: '{}' })).text).ticket
+      const h = await openTerminalSocket({ port: portN, id, origin: originN, cookie: cookieN })
+      h.ws.send(JSON.stringify({ type: 'auth', ticket: tk }))
+      await until('ready', async () => h.text.some((m) => m.type === 'ready'))
+      await sleep(250) // the shell has to be up before it reads the line
+      if (cmd) h.ws.send(Buffer.from(`${cmd}\r`))
+      h.id = id
+      return h
+    }
+    return { d: dN, port: portN, origin: originN, cookie: cookieN, hdr, dataDir: dataDirN, term }
+  }
+
+  await check(WIN ? 'a hard-killed daemon with several terminals (skipped on Windows: not verified there)' : 'a hard-killed daemon (SIGKILL) ends EVERY terminal tree, also when a later terminal has a job that ignores SIGHUP', async () => {
+    if (WIN) return 'skipped'
+    const leaves = [424301, 424302, 424303, 424304]
+    leaves.forEach((n) => killCmd(`sleep ${n}`))
+    const q = await quick('data3')
+    try {
+      await q.term('sleep 424301')
+      await q.term('sleep 424302 &')
+      await q.term('(sleep 424304 &)')
+      await q.term("trap '' HUP; sleep 424303 &") // the review's poison: a later terminal whose process outlives a hang-up
+      await until('the jobs to run', async () => leaves.every((n) => runningCmd(`sleep ${n}`).length > 0), { timeout: 15_000 })
+      const hostsBefore = hostsOf(q.d.child.pid)
+      if (hostsBefore.length !== 4) throw new Error(`${hostsBefore.length} PTY hosts for 4 terminals`)
+      await stopDaemon(q.d, 'SIGKILL')
+      await until('every job to be gone after the daemon was killed', async () => leaves.every((n) => runningCmd(`sleep ${n}`).length === 0), { timeout: 12_000 })
+      await until('every PTY host to be gone', async () => hostsBefore.every((p) => !alive(p) || readFileSync(`/proc/${p}/stat`, 'latin1').includes(') Z ')), { timeout: 12_000 })
+      return `${leaves.length} jobs and ${hostsBefore.length} hosts gone`
+    } finally {
+      leaves.forEach((n) => killCmd(`sleep ${n}`))
+      await stopDaemon(q.d, 'SIGKILL').catch(() => undefined)
+    }
+  })
+
+  await check(WIN ? 'SIGHUP stops the daemon gracefully (skipped on Windows: not verified there)' : 'SIGHUP (a closed terminal window) stops the daemon gracefully: exit 0, every tree ended, no PTY host left', async () => {
+    if (WIN) return 'skipped'
+    const leaves = [424311, 424312]
+    leaves.forEach((n) => killCmd(`sleep ${n}`))
+    const q = await quick('data4')
+    try {
+      await q.term('sleep 424311 &')
+      await q.term("trap '' HUP TERM; sleep 424312 &")
+      await until('the jobs to run', async () => leaves.every((n) => runningCmd(`sleep ${n}`).length > 0), { timeout: 15_000 })
+      const hostsBefore = hostsOf(q.d.child.pid)
+      const gone = new Promise((r) => q.d.child.once('exit', (code, sig) => r({ code, sig })))
+      q.d.child.kill('SIGHUP')
+      const exit = await Promise.race([gone, sleep(15_000).then(() => 'timeout')])
+      if (exit === 'timeout') throw new Error('the daemon did not stop on SIGHUP')
+      if (exit.code !== 0 || exit.sig !== null) throw new Error(`exit ${JSON.stringify(exit)} (a SIGHUP that kills the process outright is the old behaviour)`)
+      await until('every job to be gone', async () => leaves.every((n) => runningCmd(`sleep ${n}`).length === 0), { timeout: 10_000 })
+      for (const p of hostsBefore) if (alive(p) && !readFileSync(`/proc/${p}/stat`, 'latin1').includes(') Z ')) throw new Error(`PTY host ${p} is still running after a graceful stop`)
+      // the data folder and database of this run are private
+      const mode = (f) => statSync(f).mode & 0o777
+      if (mode(q.dataDir) !== 0o700) throw new Error(`data folder mode ${mode(q.dataDir).toString(8)}`)
+      for (const f of ['app.db', 'secrets.json']) if (mode(path.join(q.dataDir, f)) !== 0o600) throw new Error(`${f} mode ${mode(path.join(q.dataDir, f)).toString(8)}`)
+      return `exit 0; ${hostsBefore.length} hosts gone; folder 700, files 600`
+    } finally {
+      leaves.forEach((n) => killCmd(`sleep ${n}`))
+      await stopDaemon(q.d, 'SIGKILL').catch(() => undefined)
+    }
+  })
+
+  await check('signing out ends the session and closes its sockets, the terminal keeps running; the revoke command signs every browser out', async () => {
+    const q = await quick('data5')
+    try {
+      const t = await q.term()
+      const feed = await new Promise((resolve, reject) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${q.port}/ws`, { headers: { Origin: q.origin, Cookie: q.cookie } })
+        const o = { ws, closed: undefined }
+        o.closed = new Promise((res) => ws.on('close', (code) => res(code)))
+        ws.once('open', () => resolve(o))
+        ws.once('error', reject)
+      })
+      if ((await raw({ port: q.port, method: 'GET', url: '/api/health', headers: { Cookie: q.cookie } })).status !== 200) throw new Error('not signed in before')
+      const out = await raw({ port: q.port, method: 'POST', url: '/api/auth/signout', headers: q.hdr })
+      if (out.status !== 200 || !/Max-Age=0/i.test(String(out.headers['set-cookie']?.[0] ?? ''))) throw new Error(`sign-out answered ${out.status}, set-cookie ${out.headers['set-cookie']}`)
+      if ((await raw({ port: q.port, method: 'GET', url: '/api/health', headers: { Cookie: q.cookie } })).status !== 401) throw new Error('the cookie still works after signing out')
+      const codeOf = (x) => (typeof x === 'number' ? x : x?.code)
+      const codes = await Promise.race([Promise.all([feed.closed, t.closed]), sleep(5000).then(() => 'timeout')])
+      if (codes === 'timeout' || codeOf(codes[0]) !== 4401 || codeOf(codes[1]) !== 4401) throw new Error(`socket close codes ${JSON.stringify(codes)}`)
+    } finally {
+      await stopDaemon(q.d, 'SIGKILL').catch(() => undefined)
+    }
+    // the command line: a second daemon with a live session
+    const r = await quick('data6')
+    try {
+      const run = spawnSync(process.execPath, ['--import', 'tsx', 'src/cli/revoke.ts'], { cwd: daemonDir, env: { ...process.env, DATA_DIR: r.dataDir, HOME: homeDir }, encoding: 'utf8' })
+      if (run.status !== 0 || !/Revoked 1 browser session/.test(run.stdout)) throw new Error(`revoke: exit ${run.status}, ${String(run.stdout + run.stderr).slice(0, 200)}`)
+      if (/[A-Za-z0-9_-]{40,}/.test(run.stdout + run.stderr)) throw new Error('the command printed something that looks like a token')
+      await sleep(30)
+      if ((await raw({ port: r.port, method: 'GET', url: '/api/health', headers: { Cookie: r.cookie } })).status !== 401) throw new Error('the running daemon still accepts the revoked cookie')
+      return 'sign-out and revoke both end the session'
+    } finally {
+      await stopDaemon(r.d, 'SIGKILL').catch(() => undefined)
+    }
   })
 
   await check('the browser raised no unexpected console errors', async () => {

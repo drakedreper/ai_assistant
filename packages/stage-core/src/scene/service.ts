@@ -3,6 +3,12 @@
  * and saved scene presets. Every mutation is validated first and returns the stage command(s) that mirror it.
  * Invariants: object and construct ids are unique across both; parents exist; no cycles; transforms are finite and
  * bounded; assets exist, are licensed for personal use and are props (the environment is an environment asset).
+ *
+ * The licence is judged at every point of use, not only when an object is added: `validateScene` (so a saved scene preset
+ * cannot be applied once one of its assets lost its licence) and the `scene.load` a stage receives (an object whose asset
+ * is gone or no longer licensed for personal use, and everything parented to it, is left out of what is sent; a scene whose
+ * ENVIRONMENT cannot be used is not sent at all). `validateScene` does bounded work: at most MAX_OBJECTS objects, a parent
+ * chain is walked once however deep it is, and anchor transforms are checked like object transforms.
  */
 import { Anchor, CameraShot, DataConstruct, LightingPreset, Scene, SceneObject } from '@ai-assistant/shared'
 import type { Asset, Anchor as AnchorT, CameraShot as CameraShotT, DataConstruct as DataConstructT, LightingPreset as LightingT, Scene as SceneT, SceneObject as SceneObjectT, Transform } from '@ai-assistant/shared'
@@ -76,6 +82,7 @@ function codeFor(issues: ReadonlyArray<{ path: PropertyKey[] }>): SceneCode {
 
 const MAX_OBJECTS = 200
 const MAX_CONSTRUCTS = 24
+const MAX_CAMERAS = 24
 
 export class SceneService {
   constructor(private readonly deps: SceneDeps) {}
@@ -103,7 +110,8 @@ export class SceneService {
     const scene = buildCerebralVoid(this.deps.clock.now())
     this.deps.repo.saveActive(scene)
     this.installSeedPresets()
-    return { scene, value: undefined, commands: [this.sceneLoadCommand(scene)] }
+    const load = this.sceneLoadCommand(scene)
+    return { scene, value: undefined, commands: load ? [load] : [] }
   }
 
   /** Register the built-in scene presets ("void" and "void with seating") unless they already exist. */
@@ -120,18 +128,54 @@ export class SceneService {
     return [...ids].sort().map((id) => this.deps.catalog.get(id)).filter((a): a is NonNullable<typeof a> => !!a)
   }
 
-  private sceneLoadCommand(scene: SceneT): CommandDraft {
-    return { type: 'scene.load', scene, assets: this.assetsFor(scene) }
+  /**
+   * The scene as a stage may be told about it: without the objects whose asset is gone, is not a prop or is no longer
+   * licensed for personal use, and without their descendants. Undefined when the environment itself cannot be used.
+   */
+  private shownScene(scene: SceneT): SceneT | undefined {
+    const { catalog } = this.deps
+    const env = catalog.get(scene.environmentAssetId)
+    if (!env || env.kind !== 'environment' || !catalog.canUse(env.id, 'personal').ok) return undefined
+    const gone = new Set<string>()
+    for (const o of scene.objects) {
+      const a = catalog.get(o.assetId)
+      if (!a || a.kind !== 'prop' || !catalog.canUse(a.id, 'personal').ok) gone.add(o.id)
+    }
+    if (gone.size === 0) return scene
+    const children = new Map<string, string[]>()
+    for (const o of scene.objects) if (o.parentId !== null) children.set(o.parentId, [...(children.get(o.parentId) ?? []), o.id])
+    const queue = [...gone]
+    for (let i = 0; i < queue.length; i++) {
+      for (const child of children.get(queue[i]!) ?? []) {
+        if (!gone.has(child)) {
+          gone.add(child)
+          queue.push(child)
+        }
+      }
+    }
+    return { ...scene, objects: scene.objects.filter((o) => !gone.has(o.id)) }
+  }
+
+  private sceneLoadCommand(scene: SceneT): CommandDraft | undefined {
+    const shown = this.shownScene(scene)
+    return shown ? { type: 'scene.load', scene: shown, assets: this.assetsFor(shown) } : undefined
   }
 
   /** The `scene.load` command for the working scene (also used to resume after a reconnect). */
   loadCommand(): Result<CommandDraft, SceneCode> {
     const s = this.deps.repo.getActive()
-    return s ? ok(this.sceneLoadCommand(s)) : fail('no_scene', 'there is no scene yet')
+    if (!s) return fail('no_scene', 'there is no scene yet')
+    const cmd = this.sceneLoadCommand(s)
+    return cmd ? ok(cmd) : fail('licence', 'the environment of the scene cannot be used (it is not in the catalog, or its licence does not allow personal use)')
   }
 
-  /** Every problem with a scene value (empty = valid). */
+  /** Every problem with a scene value (empty = valid). Bounded work, whatever the scene holds. */
   validateScene(scene: unknown): string[] {
+    // the size limits come first, so a hostile scene cannot make the rest of the work expensive
+    const sizes = scene !== null && typeof scene === 'object' ? (scene as { objects?: unknown; constructs?: unknown; cameras?: unknown }) : {}
+    if (Array.isArray(sizes.objects) && sizes.objects.length > MAX_OBJECTS) return [`a scene has at most ${MAX_OBJECTS} objects (this one has ${sizes.objects.length})`]
+    if (Array.isArray(sizes.constructs) && sizes.constructs.length > MAX_CONSTRUCTS) return [`a scene has at most ${MAX_CONSTRUCTS} constructs (this one has ${sizes.constructs.length})`]
+    if (Array.isArray(sizes.cameras) && sizes.cameras.length > MAX_CAMERAS) return [`a scene has at most ${MAX_CAMERAS} camera shots (this one has ${sizes.cameras.length})`]
     const parsed = Scene.safeParse(scene)
     if (!parsed.success) return parsed.error.issues.map((i) => `${i.path.join('.') || 'scene'}: ${i.message}`)
     const s = parsed.data
@@ -139,6 +183,10 @@ export class SceneService {
     const env = this.deps.catalog.get(s.environmentAssetId)
     if (!env) issues.push(`environment "${s.environmentAssetId}" is not in the catalog`)
     else if (env.kind !== 'environment') issues.push(`"${s.environmentAssetId}" is a ${env.kind}, not an environment`)
+    else {
+      const lic = this.deps.catalog.canUse(env.id, 'personal')
+      if (!lic.ok) issues.push(`environment "${env.id}": ${lic.reasons.join('; ')}`)
+    }
     const ids = new Set<string>()
     for (const o of s.objects) {
       if (!isSafeId(o.id)) issues.push(`object id "${o.id}" is not path-safe`)
@@ -155,6 +203,10 @@ export class SceneService {
       const a = this.deps.catalog.get(o.assetId)
       if (!a) issues.push(`object "${o.id}": asset "${o.assetId}" is not in the catalog`)
       else if (a.kind !== 'prop') issues.push(`object "${o.id}": "${a.name}" is a ${a.kind}, not a prop`)
+      else {
+        const lic = this.deps.catalog.canUse(a.id, 'personal')
+        if (!lic.ok) issues.push(`object "${o.id}": ${lic.reasons.join('; ')}`)
+      }
       if (o.parentId !== null && !byId.has(o.parentId)) issues.push(`object "${o.id}": parent "${o.parentId}" does not exist`)
       const t = validateTransform(o.transform, `object "${o.id}" transform`)
       if (!t.ok) issues.push(t.error)
@@ -162,19 +214,31 @@ export class SceneService {
       for (const an of o.anchors) {
         if (aids.has(an.id)) issues.push(`object "${o.id}": duplicate anchor "${an.id}"`)
         aids.add(an.id)
-      }
-      // cycle check
-      const seen = new Set<string>([o.id])
-      let cur = o.parentId
-      while (cur !== null && byId.has(cur)) {
-        if (seen.has(cur)) {
-          issues.push(`object "${o.id}" is part of a parent cycle`)
-          break
-        }
-        seen.add(cur)
-        cur = byId.get(cur)!.parentId
+        const at = validateTransform(an.local, `object "${o.id}" anchor "${an.id}"`)
+        if (!at.ok) issues.push(at.error)
       }
     }
+    // parent cycles, in linear time: every object is walked at most once, however deep the chains are
+    const verdict = new Map<string, 'walking' | 'clean' | 'cyclic'>()
+    for (const o of s.objects) {
+      if (verdict.has(o.id) && verdict.get(o.id) !== 'walking') continue
+      const path: string[] = []
+      let cur: string | null = o.id
+      let cyclic = false
+      while (cur !== null && byId.has(cur)) {
+        const v = verdict.get(cur)
+        if (v === 'clean') break
+        if (v === 'cyclic' || v === 'walking') {
+          cyclic = true
+          break
+        }
+        verdict.set(cur, 'walking')
+        path.push(cur)
+        cur = byId.get(cur)!.parentId
+      }
+      for (const id of path) verdict.set(id, cyclic ? 'cyclic' : 'clean')
+    }
+    for (const o of s.objects) if (verdict.get(o.id) === 'cyclic') issues.push(`object "${o.id}" is part of a parent cycle`)
     const camIds = new Set<string>()
     for (const c of s.cameras) {
       if (camIds.has(c.id)) issues.push(`duplicate camera "${c.id}"`)
@@ -490,7 +554,7 @@ export class SceneService {
       if (scene.cameras.some((c) => c.id === parsed.data.id)) return fail('duplicate_id', `camera "${parsed.data.id}" already exists`)
       const t = validateTransform(parsed.data.transform, 'camera transform')
       if (!t.ok) return fail('invalid_transform', t.error)
-      if (scene.cameras.length >= 24) return fail('invalid_input', 'at most 24 camera shots')
+      if (scene.cameras.length >= MAX_CAMERAS) return fail('invalid_input', `at most ${MAX_CAMERAS} camera shots`)
       const cam = { ...parsed.data, transform: t.value }
       scene.cameras.push(cam)
       return ok({ value: cam, commands: [] })
@@ -540,7 +604,8 @@ export class SceneService {
     const issues = this.validateScene(next)
     if (issues.length > 0) return fail('invalid_scene', `scene preset "${id}" cannot be loaded: ${issues.join('; ')}`)
     this.deps.repo.saveActive(next)
-    return ok({ scene: next, value: { id, name: preset.name }, commands: [this.sceneLoadCommand(next)] })
+    const load = this.sceneLoadCommand(next)
+    return ok({ scene: next, value: { id, name: preset.name }, commands: load ? [load] : [] })
   }
 
   deletePreset(id: string): Result<true, SceneCode> {

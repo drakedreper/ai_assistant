@@ -158,9 +158,10 @@ export function createStageToolBindings(deps: StageToolDeps): ToolBinding[] {
     bind('character_remember', (input) => {
       const r = deps.memory.remember({ kind: input.kind as 'episode' | 'relationship' | 'preference', text: input.text as string, importance: input.importance as number })
       if (!r.ok) return text(r.error, true)
-      const { item, deduped } = r.value
+      const { item, deduped, importanceCapped } = r.value
       const kept = item.sensitivity === 'normal' ? '' : ` Kept ${item.sensitivity}: it stays out of anything sent to the cloud.`
-      return text(deduped ? `Already remembered; importance is now ${item.importance}.${kept}` : `Remembered (${item.kind}, importance ${item.importance}).${kept}`)
+      const capped = importanceCapped ? ' Importance 5 is kept for the few most essential notes, so this one is kept at 4.' : ''
+      return text(deduped ? `Already remembered; importance is now ${item.importance}.${capped}${kept}` : `Remembered (${item.kind}, importance ${item.importance}).${capped}${kept}`)
     }),
 
     bind('stage_state', () => {

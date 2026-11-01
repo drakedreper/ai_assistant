@@ -17,6 +17,8 @@ describe('terminal configuration', () => {
     })
     expect(t.claudeCommandOverride).toBeUndefined()
     expect(t.allowDevOrigins).toBe(false)
+    // the flood limits of the terminal socket: text frames have a budget of their own, far below a flood and far above a person
+    expect(t).toMatchObject({ textFrameBurst: 100, textFramesPerSec: 50, maxDroppedInputFrames: 20_000 })
     expect(t.inputBurstBytes).toBeGreaterThan(t.maxInputFrameBytes)
     expect(t.maxBufferedBytes).toBeGreaterThan(t.maxInputFrameBytes)
   })

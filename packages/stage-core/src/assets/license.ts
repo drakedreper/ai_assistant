@@ -19,9 +19,32 @@ export interface UseDecision {
   warnings: string[]
 }
 
+/**
+ * Licence ids that say nothing: "unknown" and its synonyms, placeholders ("tbd", "n/a", "?"), and descriptions that are
+ * not a licence ("proprietary", "all rights reserved", "no licence", "other", "custom"). Compared after normalisation.
+ */
+const UNKNOWN_LICENCE_IDS: ReadonlySet<string> = new Set([
+  'unknown', 'unlicensed', 'unlicenced', 'none', 'na', 'nil', 'null', 'undefined', 'tbd', 'tba', 'todo', 'unspecified', 'unstated', 'notspecified', 'notstated', 'notapplicable', 'other', 'custom', 'proprietary',
+  'allrightsreserved', 'nolicense', 'nolicence', 'nolicenseincluded', 'nolicenceincluded', 'unlicensedcontent',
+])
+
+/**
+ * The licence id as it is compared: NFKC (a fullwidth "ｕｎｋｎｏｗｎ" becomes "unknown"), invisible and control characters
+ * (zero-width spaces, BOM, NUL, bidi marks) and all whitespace removed, lower-cased, punctuation dropped. Exported for tests.
+ */
+export function normaliseLicenceId(id: unknown): string {
+  if (typeof id !== 'string') return ''
+  return id
+    .normalize('NFKC')
+    .replace(/[\p{Cc}\p{Cf}\p{Z}]+/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}?]+/gu, '')
+}
+
 const isUnknownLicence = (l: AssetLicense): boolean => {
-  const id = l.id.trim().toLowerCase()
-  return id === '' || id === 'unknown' || id === 'unlicensed' || id === 'none'
+  const id = normaliseLicenceId(l.id)
+  // empty after normalisation ("", "-", "/", "..."), nothing but question marks, or one of the words above
+  return id === '' || /^\?+$/.test(id) || UNKNOWN_LICENCE_IDS.has(id)
 }
 
 /**
@@ -62,7 +85,7 @@ export function canUse(asset: Pick<Asset, 'id' | 'name' | 'license'>, intent: Us
 /** True when the licence record is internally coherent (commercial or redistribution without personal use is not). */
 export function licenceIssues(l: AssetLicense): string[] {
   const out: string[] = []
-  if (l.id.trim() === '') out.push('licence id is empty (use "unknown" if it is not known)')
+  if (typeof l.id !== 'string' || l.id.trim() === '') out.push('licence id is empty (use "unknown" if it is not known)')
   if ((l.commercialUse || l.redistribution) && !l.personalUse) out.push('a licence that permits commercial use or redistribution must also permit personal use')
   return out
 }

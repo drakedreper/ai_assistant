@@ -36,6 +36,8 @@ export interface CallInit {
   origin?: string | false
   host?: string | false
   contentType?: string | false
+  /** X-Terminal-Proof for terminal routes: the daemon's own by default (a paired browser); a string for a wrong one; false for none. */
+  proof?: string | false
 }
 
 export interface TerminalHarness {
@@ -132,6 +134,8 @@ export async function makeTerminalHarness(opts: TerminalHarnessOptions = {}): Pr
         const o = init.origin ?? (safe ? undefined : `http://127.0.0.1:${p}`)
         if (o) headers.Origin = o
       }
+      // A paired browser sends the pairing proof on every terminal route (the page took it from the sign-in link's fragment).
+      if (init.proof !== false && /^\/api\/(?:terminals|settings\/terminals)(?:[/?]|$)/.test(path)) headers['X-Terminal-Proof'] = init.proof ?? daemon.security.terminalProof()
       let body = init.body
       if (init.json !== undefined) {
         body = JSON.stringify(init.json)
