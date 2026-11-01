@@ -109,6 +109,8 @@ export interface StageHubDeps {
   rng?: Rng
   /** The notes the knowledge graph draws. Default: the fixture notes. */
   notes?: () => GraphNoteInput[]
+  /** Something she remembered was forgotten: the daemon starts the next Claude conversation fresh, so the old thread (which holds what she wrote down) is not re-read. */
+  onMemoryForgotten?: () => void
 }
 
 export type DisconnectCause = 'stage' | 'daemon' | 'disabled' | 'refused' | 'replaced' | 'user' | 'slow' | 'stale'
@@ -542,6 +544,15 @@ export class StageHub {
       this.changed('wardrobe')
     } catch (err) {
       this.d.log.warn('stage wardrobe hook failed', { error: err instanceof Error ? err.message : 'unknown' })
+    }
+  }
+
+  /** Tell the daemon that something she remembered was forgotten (it starts the next Claude conversation fresh). Never throws. */
+  memoryForgotten(): void {
+    try {
+      this.d.onMemoryForgotten?.()
+    } catch (err) {
+      this.d.log.warn('could not start a fresh conversation after a forget', { err: err instanceof Error ? err.message.slice(0, 120) : 'unknown' })
     }
   }
 

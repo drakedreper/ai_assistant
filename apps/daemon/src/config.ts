@@ -89,6 +89,8 @@ export interface DaemonConfig {
   dbFile: string
   backend: 'fake' | 'sdk'
   authMode: 'api-key' | 'local-login'
+  /** How Secretary conversations with Claude are kept (CLAUDE_CONVERSATION): see LaneOptions.conversation in agent-core. */
+  conversation: 'fresh-daily' | 'resume'
   /** Read from ANTHROPIC_API_KEY only here. Non-enumerable so JSON.stringify and console.log never show it. */
   apiKey?: string
   claudeExecutable?: string
@@ -214,6 +216,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, ctx: Partial<Co
   if (authRaw !== 'api-key' && authRaw !== 'local-login') {
     throw new ConfigError(`CLAUDE_AUTH_MODE must be "api-key" or "local-login" (got "${authRaw.slice(0, 20)}")`)
   }
+  const conversationRaw = (env.CLAUDE_CONVERSATION ?? 'fresh-daily').trim().toLowerCase()
+  if (conversationRaw !== 'fresh-daily' && conversationRaw !== 'resume') {
+    throw new ConfigError(`CLAUDE_CONVERSATION must be "fresh-daily" or "resume" (got "${conversationRaw.slice(0, 20)}")`)
+  }
 
   const logRaw = (env.LOG_LEVEL ?? 'info').trim().toLowerCase()
   const logLevel = (['debug', 'info', 'warn', 'error', 'silent'] as const).find((l) => l === logRaw)
@@ -237,6 +243,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, ctx: Partial<Co
     dbFile: p.join(dataDir, demo ? 'demo.db' : 'app.db'),
     backend: backendRaw,
     authMode: authRaw,
+    conversation: conversationRaw,
     ...(claudeExecutable ? { claudeExecutable } : {}),
     demo,
     ...(webDist ? { webDist } : {}),
@@ -301,6 +308,7 @@ export function describeConfig(config: DaemonConfig): Record<string, string | nu
     dataDir: config.dataDir,
     backend: config.backend,
     authMode: config.authMode,
+    conversation: config.conversation,
     keySet: Boolean(config.apiKey),
     claudeExecutable: config.claudeExecutable ?? '(SDK bundled)',
     demo: config.demo,

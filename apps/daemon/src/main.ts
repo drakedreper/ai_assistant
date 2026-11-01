@@ -44,7 +44,7 @@ async function main(): Promise<void> {
     budget,
     // The stage tools (outfit, scene, gesture, camera, memory, state) join the lane's tools; the lane filters by lane and tier.
     // Her persistent character memory goes into the persona prompt too, for the cloud audience only (never private or sensitive items).
-    lane: (ctx, { stageTools, memoryDigest }) => createSecretaryLane({ ...ctx, backend, tools: [...tools, ...stageTools] }, { digest: memoryDigest }),
+    lane: (ctx, { stageTools, memoryDigest }) => createSecretaryLane({ ...ctx, backend, tools: [...tools, ...stageTools] }, { digest: memoryDigest, conversation: config.conversation }),
   })
 
   const log = daemon.ctx.log

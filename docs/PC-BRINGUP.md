@@ -1,30 +1,44 @@
 # PC bring-up (Windows 11, RTX 5070 Ti)
 
-Status: draft, updated 2026-11-01. Nothing in this document has been run on the PC yet.
+Status: optional, updated 2026-11-01. Nothing the project needs next depends on it, and nothing in this document has been run on the PC yet.
+
+## Quick start on Windows (5 minutes, optional, no GPU)
+
+Only if you want to see the real thing run. You need Node 22.12 or newer, pnpm 10 (`corepack enable`), Git, and, if `pnpm install` cannot fetch prebuilt binaries for the native addons, the Visual Studio Build Tools (C++ workload).
+
+```powershell
+git clone --branch claude/determined-pasteur-klc0fw https://github.com/drakedreper/ai_assistant.git
+cd ai_assistant
+pnpm install
+pnpm test
+pnpm --filter @ai-assistant/daemon start
+```
+
+Open the sign-in link the daemon prints. Settings, Stage shows her and the void; Settings, Privacy, "Embedded terminals" turns the terminal on; Work, Terminal opens a shell. Everything runs with the fake Claude (no network, no tokens) until you set `CLAUDE_BACKEND=sdk`. If something fails, the exact error text is all that is needed. The deeper terminal checks are below (T1 to T8). The GPU, voice, camera and engine checks are parked in [spikes/pc/PARKED.md](../spikes/pc/PARKED.md) until the voice milestone or an engine decision.
 
 ## Why this exists
 
-Everything so far was built and tested in a Linux cloud sandbox: 2,748 unit tests and 142 end-to-end checks (a real daemon process, a real Chromium, real PTYs), with a scripted fake Claude and a simulated stage. That proves the logic and the wiring. It cannot prove the parts that depend on the user's machine: Windows paths and signals, native addons, ConPTY, real Claude Code hook payloads, the GPU, the camera, the microphone, or any game engine. This page says how to close that gap and what each step decides.
+Everything so far was built and tested in a Linux cloud sandbox: 2,757 unit tests and 142 end-to-end checks (a real daemon process, a real Chromium, real PTYs), with a scripted fake Claude and a simulated stage. That proves the logic and the wiring. It cannot prove the parts that depend on the user's machine: Windows paths and signals, native addons, ConPTY, real Claude Code hook payloads, the GPU, the camera, the microphone, or any game engine. This page says how to close that gap and what each step decides.
 
-The agreed route (2026-10-31): the user runs Claude Code **on their own PC**, in a clone of this repo, using [spikes/pc/KICKOFF-PROMPT.md](../spikes/pc/KICKOFF-PROMPT.md). The cloud session cannot reach the PC (Remote Control lists no computer, and the Desktop Commander available in the cloud session runs inside the sandbox, not on the user's machine). Results are pasted back and folded into the docs.
+Two ways to run it. Paste: the user runs Claude Code **on their own PC**, in a clone of this repo, using [spikes/pc/KICKOFF-PROMPT.md](../spikes/pc/KICKOFF-PROMPT.md), and pastes the results back. Zero-paste: the user enables Remote Control for a folder in the Claude desktop app (Settings, Claude Code, Remote Control), and the cloud session runs the checks itself while the user only approves prompts. Without one of the two the cloud session cannot reach the PC (it listed no computer, and the Desktop Commander available there runs inside the sandbox).
 
 ## What each step verifies
 
 | Step | Verifies | Why it matters |
 |---|---|---|
-| System inventory (`collect-system-info.ps1`) | GPU, driver, CUDA, VRAM, Unreal and Unity installs, build tools, Node, pnpm, claude | Picks the engine spike setup and flags missing prerequisites |
-| `pnpm install`, typecheck, tests | `better-sqlite3` and `node-pty` native addons on Windows; every package's tests on Windows. Expected: 2,748 tests pass (shared 9, agent-core 457, stage-core 1,400, daemon 882). A different count is a finding | The daemon and terminal depend on native code; paths and file locking behave differently |
+| (Parked) System inventory (`collect-system-info.ps1`) | GPU, driver, CUDA, VRAM, Unreal and Unity installs, build tools, Node, pnpm, claude | Picks the engine spike setup and flags missing prerequisites |
+| `pnpm install`, typecheck, tests | `better-sqlite3` and `node-pty` native addons on Windows; every package's tests on Windows. Expected: 2,757 tests pass (shared 9, agent-core 464, stage-core 1,400, daemon 884). A different count is a finding | The daemon and terminal depend on native code; paths and file locking behave differently |
 | End-to-end scripts | Sign-in cookie flow, WebSocket reconnect, the embedded terminal (ConPTY, `claude.exe` lookup), the stage simulator, the memory panel. Expected: smoke 26, daemon 37, terminal 41, stage 38 (142 checks), but **five terminal checks are skipped on Windows by design** (next section) | The terminal is the highest-risk and most Windows-sensitive feature |
 | Manual terminal checks (PowerShell, below) | Process-tree kill, what happens to a terminal when the daemon is killed or its window is closed, loopback-only binding, secrets file permissions, environment scrub | These are exactly the behaviours the scripts cannot see on Windows. They decide whether the terminal is safe to leave enabled |
-| Hooks with a real session | The real field names and delivery of Claude Code hooks; fail-open behaviour; PermissionRequest side effects | The hook monitor is built on assumptions taken from documentation (ADR 0003) |
-| Time to first token | Whether a persistent SDK session is fast enough for voice | Decides whether a separate voice lane exists |
-| whisper.cpp (CUDA) and Kokoro | Latency and VRAM on the 5070 Ti, in English | Decides the voice stack and the GPU budget shared with the 3D stage |
-| WebGL and camera page | Hardware WebGL2, camera, microphone, audio latency | Decides the browser stage options |
+| (Optional) Hooks with a real session | The real field names and delivery of Claude Code hooks; fail-open behaviour; PermissionRequest side effects | The hook monitor is built on assumptions taken from documentation (ADR 0003) |
+| (Parked) Time to first token | Whether a persistent SDK session is fast enough for voice | Decides whether a separate voice lane exists |
+| (Parked) whisper.cpp (CUDA) and Kokoro | Latency and VRAM on the 5070 Ti, in English | Decides the voice stack and the GPU budget shared with the 3D stage |
+| (Parked) WebGL and camera page | Hardware WebGL2, camera, microphone, audio latency | Decides the browser stage options |
 
 ## Risks specific to this machine
 
-- **Blackwell consumer GPU (compute capability 12.0).** From general knowledge it needs a recent driver and CUDA 12.8 or newer, and some prebuilt ML wheels only support it from builds made for that CUDA. Verify against the actual tools; do not assume a benchmark transfers from other cards. (Unverified here.)
-- **16 GB of VRAM is shared** by the 3D stage, local speech models and anything else running. Always record VRAM with the stage and each model loaded.
+(The GPU risks, Blackwell and the shared 16 GB of VRAM, moved to [spikes/pc/PARKED.md](../spikes/pc/PARKED.md) with the GPU checks.)
+
 - **Native addons need a compiler on Windows** unless a prebuilt binary matches. If `node-pty` or `better-sqlite3` fails to install, the usual fix is the Visual Studio Build Tools C++ workload; the fallback for the terminal is a prebuilt-binaries fork of node-pty.
 - **ConPTY and the PTY host.** Every terminal runs in its own host process (`apps/daemon/src/terminal/ptyHost.ts`). On Windows the host is started without `detached`. Whether it survives the daemon's death long enough to end the terminal's process tree with `taskkill /T`, or dies together with the daemon and leaves ConPTY closing the console as the only cleanup, is unverified (apps/daemon/README.md, "Windows notes"). The manual checks T3 and T4 below answer it.
 - **Claude Code on native Windows has no sandbox** and uses Git Bash or PowerShell for its tools; the embedded terminal inherits whatever the user runs there.

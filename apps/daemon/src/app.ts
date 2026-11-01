@@ -216,6 +216,8 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
     clock,
     newId,
     persona: () => snapshots.persona(),
+    // Forgetting something she remembered also ends the old Claude conversation (it holds what she wrote down).
+    onMemoryForgotten: () => void lane?.startFresh().catch(() => undefined),
     ...(opts.stage ? { overrides: opts.stage } : {}),
   })
   const theLane: SecretaryLane = typeof opts.lane === 'function' ? opts.lane(laneCtx, { stageTools: stage.toolBindings(), memoryDigest: () => stage?.hub.memoryDigest() }) : opts.lane

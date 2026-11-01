@@ -523,18 +523,18 @@ describe('budget', () => {
   })
 })
 
-describe('resume', () => {
+describe('resume mode (conversation: "resume", the old behaviour)', () => {
   it('persists the backend session id and reuses it after a restart', async () => {
     const store = new MemoryStore()
     const backend = createFakeBackend({ now: () => NOW })
-    const first = makeHarness({ backend, store })
+    const first = makeHarness({ backend, store, lane: { conversation: 'resume' } })
     await ask(first, 'hello')
     expect(store.sessionIds.get('secretary')).toBe('fake-secretary-1')
     expect(first.lane.status().backendSessionId).toBe('fake-secretary-1')
     await first.lane.stop()
     expect(backend.opened[0]?.resumeSessionId).toBeUndefined()
 
-    const second = makeHarness({ backend, store })
+    const second = makeHarness({ backend, store, lane: { conversation: 'resume' } })
     await second.lane.start()
     expect(backend.opened[1]?.resumeSessionId).toBe('fake-secretary-1')
     await ask(second, 'thanks')
@@ -543,7 +543,7 @@ describe('resume', () => {
   })
 
   it('a session open across midnight is renewed on the next message, resuming the same conversation', async () => {
-    const h = makeHarness()
+    const h = makeHarness({ lane: { conversation: 'resume' } })
     await ask(h, 'hello')
     expect(h.backend.opened).toHaveLength(1)
     h.clock.date = new Date(2026, 10, 2, 23, 50)
@@ -558,7 +558,7 @@ describe('resume', () => {
 
   it('the renewed session carries the new date in its first turn context', async () => {
     const mb = new ManualBackend()
-    const h = makeHarness({ backend: mb })
+    const h = makeHarness({ backend: mb, lane: { conversation: 'resume' } })
     await h.lane.start()
     await h.lane.send(turnOf('one'))
     mb.last.push({ type: 'turn_end' })
@@ -574,7 +574,7 @@ describe('resume', () => {
     const store = new MemoryStore()
     store.saveBackendSessionId('secretary', 'prev')
     const mb = new ManualBackend()
-    const h = makeHarness({ backend: mb, store })
+    const h = makeHarness({ backend: mb, store, lane: { conversation: 'resume' } })
     await h.lane.send(turnOf('hello again'))
     expect(mb.opened[0]?.resumeSessionId).toBe('prev')
     expect(mb.last.sent[0]?.context).not.toMatch(/Earlier in this conversation/)
@@ -587,7 +587,7 @@ describe('resume', () => {
     store.upsertChat({ id: 'old-2', role: 'assistant', createdAt: NOW.toISOString(), modality: 'text', parts: [{ type: 'text', text: 'Done, it is at the top of tomorrow.', emotion: 'happy' }] })
     const mb = new ManualBackend()
     mb.failOpen = (o) => (o.resumeSessionId ? new Error('No conversation found with session ID: gone') : undefined)
-    const h = makeHarness({ backend: mb, store })
+    const h = makeHarness({ backend: mb, store, lane: { conversation: 'resume' } })
     await h.lane.send(turnOf('where were we?'))
     expect(mb.opened.map((o) => o.resumeSessionId)).toEqual(['gone', undefined])
     const context = mb.last.sent[0]?.context ?? ''
@@ -603,7 +603,7 @@ describe('resume', () => {
     store.saveBackendSessionId('secretary', 'prev')
     const mb = new ManualBackend()
     mb.failOpen = () => new BackendError('connect ECONNREFUSED', 'process', true)
-    const h = makeHarness({ backend: mb, store, lane: { timers: fakeTimers() } })
+    const h = makeHarness({ backend: mb, store, lane: { timers: fakeTimers(), conversation: 'resume' } })
     await h.lane.start()
     expect(mb.opened.map((o) => o.resumeSessionId)).toEqual(['prev']) // no fresh session was started in its place
     expect(store.sessionIds.get('secretary')).toBe('prev')
@@ -615,10 +615,124 @@ describe('resume', () => {
     store.saveBackendSessionId('secretary', 'prev')
     const mb = new ManualBackend()
     mb.failOpen = () => new BackendError('No API key', 'auth', false)
-    const h = makeHarness({ backend: mb, store })
+    const h = makeHarness({ backend: mb, store, lane: { conversation: 'resume' } })
     await h.lane.start()
     expect(mb.opened).toHaveLength(1)
     expect(h.lane.status()).toMatchObject({ state: 'error', error: 'No API key' })
+  })
+})
+
+describe('fresh conversations (the default): memory carries the thread, not an ever-growing history', () => {
+  it('a restart does not resume the stored conversation; the new one gets the memory in its prompt and a seed of recent chat', async () => {
+    const store = new MemoryStore()
+    store.saveBackendSessionId('secretary', 'prev')
+    store.upsertChat({ id: 'old-1', role: 'user', createdAt: NOW.toISOString(), modality: 'text', parts: [{ type: 'text', text: 'Remind me about the Atlas migration.' }] })
+    const mb = new ManualBackend()
+    const h = makeHarness({ backend: mb, store, lane: { digest: () => 'What I remember about you and us: tea without sugar' } })
+    await h.lane.send(turnOf('where were we?'))
+    expect(mb.opened).toHaveLength(1)
+    expect(mb.opened[0]?.resumeSessionId).toBeUndefined()
+    expect(mb.opened[0]?.systemPrompt).toContain('tea without sugar')
+    expect(mb.last.sent[0]?.context).toContain('User: Remind me about the Atlas migration.')
+    expect(store.sessionIds.get('secretary')).toBe('manual-1') // the new conversation replaces the stored id
+  })
+
+  it('a session open across midnight is replaced by a NEW conversation, not resumed', async () => {
+    const h = makeHarness()
+    await ask(h, 'hello')
+    h.clock.date = new Date(2026, 10, 2, 23, 50)
+    await ask(h, 'thanks')
+    expect(h.backend.opened).toHaveLength(1) // same day: same session
+    h.clock.date = new Date(2026, 10, 3, 7, 30)
+    await ask(h, 'good morning')
+    expect(h.backend.opened).toHaveLength(2)
+    expect(h.backend.opened[1]?.resumeSessionId).toBeUndefined()
+    expect(h.lane.status().backendSessionId).toBe('fake-secretary-2')
+    expect(h.store.messages().map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant']) // the chat itself is not lost
+  })
+
+  it('a crash restart on the same day still resumes the conversation this lane had', async () => {
+    const mb = new ManualBackend()
+    const timers = fakeTimers()
+    const h = makeHarness({ backend: mb, lane: { timers } })
+    await h.lane.start()
+    await h.lane.send(turnOf('one'))
+    mb.last.push({ type: 'turn_end' })
+    await h.lane.whenIdle()
+    const id = h.lane.status().backendSessionId
+    expect(id).toBe('manual-1')
+    mb.last.push({ type: 'error', message: 'the process died', retryable: true, kind: 'process' })
+    await until(() => timers.pending().length > 0)
+    timers.fire()
+    await until(() => mb.opened.length >= 2)
+    expect(mb.opened[1]?.resumeSessionId).toBe(id)
+  })
+
+  it('startFresh() when idle ends the session, forgets the stored id, and the next conversation carries the updated memory', async () => {
+    const mb = new ManualBackend()
+    let digest = 'What I remember about you and us: tea without sugar'
+    const h = makeHarness({ backend: mb, lane: { digest: () => digest } })
+    await h.lane.start()
+    await h.lane.send(turnOf('one'))
+    mb.last.push({ type: 'turn_end' })
+    await h.lane.whenIdle()
+    expect(mb.opened[0]?.systemPrompt).toContain('tea without sugar')
+    digest = 'What I remember about you and us: nothing yet'
+    await h.lane.startFresh()
+    expect(mb.sessions[0]?.closed).toBe(true)
+    expect(h.store.sessionIds.has('secretary')).toBe(false)
+    expect(h.lane.status().backendSessionId).toBeUndefined()
+    await h.lane.send(turnOf('two'))
+    expect(mb.opened).toHaveLength(2)
+    expect(mb.opened[1]?.resumeSessionId).toBeUndefined()
+    expect(mb.opened[1]?.systemPrompt).toContain('nothing yet')
+    expect(mb.opened[1]?.systemPrompt).not.toContain('tea without sugar')
+    // the recent-chat seed would quote what she was just made to forget, so this first conversation starts from the stored memory only
+    expect(mb.last.sent[0]?.context ?? '').not.toContain('Earlier in this conversation')
+  })
+
+  it('the recent-chat seed comes back for the conversation after that one', async () => {
+    const mb = new ManualBackend()
+    const h = makeHarness({ backend: mb })
+    await h.lane.start()
+    await h.lane.send(turnOf('one'))
+    mb.last.push({ type: 'turn_end' })
+    await h.lane.whenIdle()
+    await h.lane.startFresh()
+    await h.lane.send(turnOf('two'))
+    mb.last.push({ type: 'turn_end' })
+    await h.lane.whenIdle()
+    expect(mb.last.sent[0]?.context ?? '').not.toContain('Earlier in this conversation')
+    h.clock.date = new Date(2026, 10, 3, 8, 0) // the next day: another new conversation, seeded as usual
+    await h.lane.send(turnOf('three'))
+    expect(mb.opened).toHaveLength(3)
+    expect(mb.last.sent[0]?.context).toContain('Earlier in this conversation')
+  })
+
+  it('startFresh() during a turn lets that turn finish on the old conversation, then starts a new one', async () => {
+    const mb = new ManualBackend()
+    const h = makeHarness({ backend: mb })
+    await h.lane.start()
+    await h.lane.send(turnOf('one'))
+    await h.lane.startFresh() // asked while the reply is still being written
+    expect(mb.sessions[0]?.closed).toBe(false)
+    mb.last.push({ type: 'turn_end' })
+    await h.lane.whenIdle()
+    await h.lane.send(turnOf('two'))
+    expect(mb.sessions[0]?.closed).toBe(true)
+    expect(mb.opened).toHaveLength(2)
+    expect(mb.opened[1]?.resumeSessionId).toBeUndefined()
+  })
+
+  it('startFresh() also clears the stored id in resume mode, so even that mode starts over', async () => {
+    const store = new MemoryStore()
+    store.saveBackendSessionId('secretary', 'prev')
+    const mb = new ManualBackend()
+    const h = makeHarness({ backend: mb, store, lane: { conversation: 'resume' } })
+    await h.lane.startFresh()
+    expect(store.sessionIds.has('secretary')).toBe(false)
+    await h.lane.send(turnOf('hello'))
+    expect(mb.opened[0]?.resumeSessionId).toBeUndefined()
   })
 })
 

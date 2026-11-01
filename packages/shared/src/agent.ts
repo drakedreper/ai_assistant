@@ -141,6 +141,8 @@ export interface BudgetGuard {
 export interface LaneStore {
   loadBackendSessionId(lane: LaneId): string | undefined
   saveBackendSessionId(lane: LaneId, id: string): void
+  /** Forget the stored conversation id, so even a lane that resumes starts a new conversation next time. */
+  clearBackendSessionId?(lane: LaneId): void
   /** Insert or replace by message id. */
   upsertChat(message: ChatMessage): void
   recentChat(limit: number): ChatMessage[]
@@ -185,5 +187,11 @@ export interface SecretaryLane {
   /** True when the approval belonged to this lane (so the daemon knows it was handled). */
   decideApproval(id: string, decision: 'approved' | 'denied'): boolean
   status(): LaneStatus
+  /**
+   * Start the next conversation from the stored memory and a short seed of recent chat, not from the old thread: the live
+   * Claude session ends (after the turn in flight, if any) and the stored conversation id is forgotten. Used when she is
+   * made to forget something, so the old thread, which holds what she wrote down, is no longer re-read.
+   */
+  startFresh(): Promise<void>
   stop(): Promise<void>
 }

@@ -6,7 +6,7 @@ describe('isDaemonInternalVar', () => {
     for (const n of ['DAEMON_PORT', 'DAEMON_ANYTHING', 'AI_ASSISTANT_HOOK_TOKEN', 'AIA_X', 'MIRA_STAGE_TOKEN', 'mira_lowercase', 'daemon_port']) expect(isDaemonInternalVar(n), n).toBe(true)
   })
   it('removes every variable of the daemon configuration table', () => {
-    for (const n of ['DATA_DIR', 'DEV_ORIGINS', 'WEB_DIST', 'CLAUDE_BACKEND', 'CLAUDE_AUTH_MODE', 'DEMO', 'LOG_LEVEL', 'RETENTION_DAYS', 'BUDGET_SECRETARY_USD', 'BUDGET_GLOBAL_USD', 'STALE_RUNNING_MINUTES', 'STALE_IDLE_MINUTES', 'TERMINAL_MAX', 'TERMINAL_IDLE_MINUTES', 'TERMINAL_SCROLLBACK_KB', 'TERMINAL_CLAUDE_COMMAND', 'ANTHROPIC_API_KEY']) {
+    for (const n of ['DATA_DIR', 'DEV_ORIGINS', 'WEB_DIST', 'CLAUDE_BACKEND', 'CLAUDE_AUTH_MODE', 'CLAUDE_CONVERSATION', 'DEMO', 'LOG_LEVEL', 'RETENTION_DAYS', 'BUDGET_SECRETARY_USD', 'BUDGET_GLOBAL_USD', 'STALE_RUNNING_MINUTES', 'STALE_IDLE_MINUTES', 'TERMINAL_MAX', 'TERMINAL_IDLE_MINUTES', 'TERMINAL_SCROLLBACK_KB', 'TERMINAL_CLAUDE_COMMAND', 'ANTHROPIC_API_KEY']) {
       expect(isDaemonInternalVar(n), n).toBe(true)
     }
   })

@@ -216,7 +216,20 @@ describe('daemon + real Secretary lane + fake backend + SQLite', () => {
     expect(snap.settings.audit.some((a) => a.action === 'tool:calendar_agenda')).toBe(true)
   })
 
-  it('saves the lane\'s backend session id, treats it as owned (hooks for it are dropped), and resumes it after a restart', async () => {
+  it('by default a restart starts a fresh conversation (memory-first), while the chat history is still there', async () => {
+    const dir = makeTmp('integration-fresh-')
+    cleanups.push(dir.cleanup)
+    const first = await rig({ dataDir: dir.dir })
+    await first.call('/api/chat', { json: { text: 'hello' } })
+    await first.lane.whenIdle()
+    await first.stop()
+    const second = await rig({ dataDir: dir.dir })
+    expect(second.backend.opened[0]?.resumeSessionId).toBeUndefined()
+    const snap = await snapshot(second)
+    expect(snap.chat.map((m) => m.role)).toEqual(['assistant', 'user', 'assistant'])
+  })
+
+  it('saves the lane\'s backend session id, treats it as owned (hooks for it are dropped), and in resume mode resumes it after a restart', async () => {
     const dir = makeTmp('integration-restart-')
     cleanups.push(dir.cleanup)
     const first = await rig({ dataDir: dir.dir })
@@ -235,8 +248,8 @@ describe('daemon + real Secretary lane + fake backend + SQLite', () => {
     expect(first.daemon.ctx.hooks.stats().ownedDropped).toBe(1)
     await first.stop()
 
-    const second = await rig({ dataDir: dir.dir })
-    expect(second.backend.opened[0]?.resumeSessionId).toBe(sessionId) // the lane asked the backend to resume
+    const second = await rig({ dataDir: dir.dir, laneOptions: { conversation: 'resume' } })
+    expect(second.backend.opened[0]?.resumeSessionId).toBe(sessionId) // in 'resume' mode the lane asks the backend to resume
     const snap = await snapshot(second)
     expect(snap.chat.map((m) => m.role)).toEqual(['assistant', 'user', 'assistant']) // history restored, no second greeting
     // an ordinary external session still works

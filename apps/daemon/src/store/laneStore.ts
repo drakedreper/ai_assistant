@@ -24,6 +24,9 @@ export function createLaneStore(store: Store, opts: LaneStoreOptions): LaneStore
       store.addLaneSession(id, lane, opts.now().toISOString())
       opts.onOwnedSession?.(id, lane)
     },
+    clearBackendSessionId(lane) {
+      store.kvDelete(sessionKey(lane))
+    },
     upsertChat(message: ChatMessage) {
       store.upsertChat(message)
     },

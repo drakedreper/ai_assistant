@@ -147,6 +147,11 @@ export class FakeLane implements SecretaryLane {
     return { state: this.state, backend: 'sdk', ...(this.error ? { error: this.error } : {}) }
   }
 
+  freshStarts = 0
+  async startFresh(): Promise<void> {
+    this.freshStarts++
+  }
+
   async stop(): Promise<void> {
     this.stopped = true
     this.state = 'stopped'

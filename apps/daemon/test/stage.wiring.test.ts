@@ -349,4 +349,28 @@ describe('what she writes down leaves no copy behind once you forget it', () => 
     expect(stored(d)).not.toContain(TEXT)
     expect(d.daemon.store.getApproval('ap-orphan')?.approval).toMatchObject({ status: 'denied' })
   })
+
+  it('forgetting starts a fresh Claude conversation: the next session has no resumeSessionId and a prompt without the text (a refused forget does not)', async () => {
+    const { d } = await boot()
+    expect((await chat(d, `Please remember that ${TEXT}`)).status).toBe(202)
+    const card = await waitForCard(d)
+    expect((await decide(d, card.id, 'approved')).ok).toBe(true)
+    await d.lane.whenIdle()
+    const memory = d.hub.memory.list()
+    expect(memory).toHaveLength(1)
+    const sessions = d.backend.opened.length
+
+    expect((await d.call('/api/stage/memory/mem.ghost', { method: 'DELETE' })).status).toBe(404) // nothing was forgotten
+    expect((await chat(d, 'Hello once more')).status).toBe(202)
+    await d.lane.whenIdle()
+    expect(d.backend.opened.length).toBe(sessions) // the same conversation carried on
+
+    expect((await d.call(`/api/stage/memory/${memory[0]!.id}`, { method: 'DELETE' })).status).toBe(200)
+    expect((await chat(d, 'Hello again')).status).toBe(202)
+    await d.lane.whenIdle()
+    expect(d.backend.opened.length).toBe(sessions + 1)
+    const next = d.backend.opened.at(-1)!
+    expect(next.resumeSessionId).toBeUndefined()
+    expect(next.systemPrompt).not.toContain(TEXT)
+  })
 })

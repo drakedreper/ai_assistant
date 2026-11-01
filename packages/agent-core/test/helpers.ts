@@ -30,6 +30,9 @@ export class MemoryStore implements LaneStore {
   loadBackendSessionId(lane: LaneId): string | undefined {
     return this.sessionIds.get(lane)
   }
+  clearBackendSessionId(lane: LaneId): void {
+    this.sessionIds.delete(lane)
+  }
   saveBackendSessionId(lane: LaneId, id: string): void {
     this.sessionIds.set(lane, id)
   }

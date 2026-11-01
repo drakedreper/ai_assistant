@@ -821,6 +821,9 @@ export class DaemonClient implements ApiClient {
         this.lose(true)
         return
       }
+      // A socket that is already closing reports its own end (the close event follows). Sending on it throws nothing but makes
+      // the browser log a console error ("WebSocket is already in CLOSING or CLOSED state"), which was a rare flake in the e2e.
+      if (ws.readyState !== 1 /* OPEN */) return
       try {
         ws.send('{"type":"ping"}')
       } catch {

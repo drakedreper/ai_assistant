@@ -64,6 +64,13 @@ export interface LaneOptions {
   digest?: () => string | undefined
   /** How many recent messages seed a session that could not be resumed. Default 8; 0 disables. */
   seedMessages?: number
+  /**
+   * How conversations with Claude are kept. 'fresh-daily' (default): a new conversation each local day and after a restart of
+   * the daemon, carried by the stored memory in the system prompt and a short seed of recent chat; only a crash restart of the
+   * same running lane, on the same day, resumes the conversation it had. 'resume': one stored conversation that is resumed
+   * for ever (renewed daily). The default costs fewer tokens, because a resumed history is re-read on every turn and only grows.
+   */
+  conversation?: 'fresh-daily' | 'resume'
 }
 
 /** The lane plus a way for tests and the daemon to wait until nothing is running or queued. */
@@ -119,6 +126,7 @@ export function createSecretaryLane(deps: LaneDeps, opts: LaneOptions = {}): Sec
   const timers = opts.timers ?? defaultTimers
   const interruptTimeoutMs = opts.interruptTimeoutMs ?? 5000
   const seedMessages = opts.seedMessages ?? 8
+  const conversation = opts.conversation ?? 'fresh-daily'
   const isAuto = opts.isAutoApproved ?? ((spec: ToolSpec) => isAutoTier(spec.tier))
 
   // The lane's tools: its own lane, never a locked one. The broker and the backend enforce the same rule again.
@@ -138,6 +146,12 @@ export function createSecretaryLane(deps: LaneDeps, opts: LaneOptions = {}): Sec
   /** The local date the session was opened on. A session older than that is renewed (see pump). */
   let sessionDay = ''
   let backendSessionId: string | undefined
+  /** The local date the current backend conversation was started on (a conversation from an earlier day is not resumed). */
+  let conversationDay = ''
+  /** startFresh() was asked while a turn was running: the session ends before the next turn. */
+  let freshRequested = false
+  /** After startFresh() the first new conversation gets no recent-chat seed: the seed would quote what she was just made to forget. */
+  let skipSeedOnce = false
   let turn: ActiveTurn | undefined
   const queue: UserTurn[] = []
   let orphanTerminals = 0
@@ -278,10 +292,15 @@ export function createSecretaryLane(deps: LaneDeps, opts: LaneOptions = {}): Sec
       ...(deps.env.claudeExecutable && claude.mode === 'local-login' ? { claudeExecutable: deps.env.claudeExecutable } : {}),
     }
     let resumeId: string | undefined
-    try {
-      resumeId = deps.store.loadBackendSessionId(LANE)
-    } catch {
-      resumeId = undefined
+    if (conversation === 'resume') {
+      try {
+        resumeId = deps.store.loadBackendSessionId(LANE)
+      } catch {
+        resumeId = undefined
+      }
+    } else if (backendSessionId && conversationDay === localDate(deps.now())) {
+      // Fresh each day: only a conversation this running lane started earlier today is picked up again (a crash restart).
+      resumeId = backendSessionId
     }
 
     let opened: AgentSession | undefined
@@ -315,7 +334,8 @@ export function createSecretaryLane(deps: LaneDeps, opts: LaneOptions = {}): Sec
     const gen = ++sessionGen
     state = 'ready'
     lastContext = undefined
-    seed = resumed ? undefined : buildSeed()
+    seed = resumed || skipSeedOnce ? undefined : buildSeed()
+    skipSeedOnce = false
     void consume(opened, gen)
   }
 
@@ -458,9 +478,11 @@ export function createSecretaryLane(deps: LaneDeps, opts: LaneOptions = {}): Sec
           notice('system', budget.reason)
           break
         }
-        // A long-lived session is renewed once per day (resuming the same conversation). That keeps the SDK's own
-        // per-session cost cap in step with the DAILY budget, and lets persona edits take effect.
-        if (session && sessionDay !== localDate(deps.now())) closeSession()
+        // A long-lived session is renewed once per day. In 'resume' mode that resumes the same conversation; by default it
+        // starts a new one from the stored memory. Either way the SDK's per-session cost cap stays in step with the DAILY
+        // budget and persona edits and new memories take effect. startFresh() ends it early.
+        if (session && (freshRequested || sessionDay !== localDate(deps.now()))) closeSession()
+        freshRequested = false
         if (!session) {
           if (restartTimer !== undefined) {
             timers.clearTimeout(restartTimer)
@@ -515,6 +537,7 @@ export function createSecretaryLane(deps: LaneDeps, opts: LaneOptions = {}): Sec
     if (ev.type === 'session') {
       if (ev.sessionId !== backendSessionId) {
         backendSessionId = ev.sessionId
+        conversationDay = localDate(deps.now())
         try {
           deps.store.saveBackendSessionId(LANE, ev.sessionId)
         } catch {
@@ -713,6 +736,19 @@ export function createSecretaryLane(deps: LaneDeps, opts: LaneOptions = {}): Sec
         session?.resolvePermission(result.requestId, result.decision)
       }
       return true
+    },
+
+    async startFresh() {
+      backendSessionId = undefined
+      conversationDay = ''
+      skipSeedOnce = true
+      try {
+        deps.store.clearBackendSessionId?.(LANE)
+      } catch {
+        // the in-process id is already gone: this lane will not resume it
+      }
+      if (turn) freshRequested = true // the turn in flight finishes on the old conversation; the next one starts a new one
+      else if (session) closeSession()
     },
 
     status(): LaneStatus {

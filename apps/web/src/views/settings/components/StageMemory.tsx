@@ -181,7 +181,7 @@ export function MemoryPanel() {
         She writes these herself, with her memory tool, while you talk, and each one asks you first. When a conversation with Claude is opened, her prompt gets a short summary of the items marked normal; private and sensitive ones are never added to that summary.
       </p>
       <p className="mt-1.5 text-[11.5px] leading-snug text-faint">
-        Forgetting removes an item from storage and from that summary. It does not remove the conversation in which she wrote it: Claude keeps that conversation, including what she passed to the memory tool, and it is resumed every day, so she can still read it and write the item down again. Claude Code also keeps its own transcript on this PC (see Privacy). This list is only her memory: what she has learned about you (Settings, Memory) and your chat history are separate. It works even while the stage is switched off.
+        Forgetting removes an item from storage and from that summary, and starts a fresh conversation with Claude from the stored memory alone, so the old thread (which holds what she wrote down) is not re-read. It cannot reach Claude Code&apos;s own transcript of that thread on this PC (see Privacy), your own chat history, or backups. This list is only her memory: what she has learned about you (Settings, Memory) is separate. It works even while the stage is switched off.
       </p>
       <StageNotice error={error} />
     </Panel>

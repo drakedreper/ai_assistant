@@ -320,6 +320,7 @@ export class StageActions {
     const item = this.hub.memory.get(id)
     if (!item || !this.hub.memory.forget(id)) return fail(404, 'not_found', 'She does not remember that any more.')
     this.hub.stageStore.scrub()
+    this.hub.memoryForgotten()
     this.hub.audit({ action: 'Forgot something she remembered', target: 'Her memory', outcome: 'auto', detail: `${item.kind}, ${this.hub.memory.labelOf(item)}` })
     return { ok: true, value: { forgotten: 1 }, sent: 0 }
   }
@@ -327,6 +328,7 @@ export class StageActions {
   forgetAllMemory(): ActionResult<{ forgotten: number }> {
     const n = this.hub.memory.forgetAll() // one statement: it also removes a row the list could not show
     this.hub.stageStore.scrub()
+    this.hub.memoryForgotten()
     this.hub.audit({ action: 'Forgot everything she remembered', target: 'Her memory', outcome: 'auto', detail: `${n} item${n === 1 ? '' : 's'}` })
     return { ok: true, value: { forgotten: n }, sent: 0 }
   }
