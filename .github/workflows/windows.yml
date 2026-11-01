@@ -15,6 +15,7 @@ on:
       - 'scripts/**'
       - 'apps/**'
       - 'packages/**'
+      - 'unity/**'
       - '.github/workflows/windows.yml'
   workflow_dispatch:
 
@@ -154,6 +155,33 @@ jobs:
             }
           }
           if ($bad -gt 0) { exit 1 }
+
+      # The C# stage client has path, process and file code that behaves differently on Windows (the content folder resolver,
+      # the credentials file, the live tests that start the real daemon with node). dotnet is installed here explicitly so the
+      # step does not depend on what the image happens to carry. The start.cmd step above installed the daemon's dependencies.
+      - uses: actions/setup-dotnet@v4
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: C# stage client tests (information)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = 'Continue'
+          dotnet --version
+          $out = dotnet test unity/Packages/com.mira.stage/Tests~/Tests/Mira.Stage.Tests.csproj -nologo -v q 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          $lines = $out -split "`r?`n"
+          Write-Host "== dotnet test (exit $code)"
+          $lines | Where-Object { $_ -match '(Passed|Failed)! ' -or $_ -match '\[FAIL\]' -or $_ -match 'error ' } | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            Write-Host '---- the end of the output, with the failure messages'
+            $lines | Select-Object -Last 160 | ForEach-Object { Write-Host $_ }
+          }
+          exit $code
 
       - name: Playwright and its Chromium (information)
         if: ${{ !cancelled() }}
