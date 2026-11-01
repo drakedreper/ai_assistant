@@ -6,7 +6,7 @@ Status (2026-11-01): the mockup screens are an accepted **draft**. Built and tes
 
 ## Quick start
 
-Requirements: Node >= 22.12 and pnpm 10 (the repo pins `pnpm@10.28.0`).
+Requirements: Node >= 22.14 (the bundled SQLite library crashes on older 22.x) and pnpm 10 (the repo pins `pnpm@10.28.0`). No C++ compiler is needed on Windows or macOS: both native addons ship prebuilt binaries.
 
 ```
 pnpm install

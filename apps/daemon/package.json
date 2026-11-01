@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "hooks": "tsx src/cli/hooks.ts",
+    "check-native": "tsx src/cli/checkNative.ts",
     "stage": "tsx src/stage/cli.ts"
   },
   "dependencies": {

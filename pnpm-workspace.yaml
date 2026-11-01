@@ -16,5 +16,10 @@ catalog:
 
 onlyBuiltDependencies:
   - esbuild
-  - better-sqlite3
   - node-pty
+
+# better-sqlite3 ships prebuilt binaries for Windows, macOS and Linux inside its npm package and loads them before it
+# looks at build/. Letting it build only makes pnpm run `node-gyp rebuild` (the package has a binding.gyp), which fails
+# on a PC without a C++ toolchain. Do not add it to onlyBuiltDependencies. apps/daemon/test/native-addons.test.ts guards this.
+ignoredBuiltDependencies:
+  - better-sqlite3

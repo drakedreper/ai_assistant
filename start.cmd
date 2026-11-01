@@ -6,7 +6,7 @@ cd /d "%~dp0"
 
 where node >nul 2>nul
 if errorlevel 1 goto nonode
-node -e "const [a,b]=process.versions.node.split(\".\").map(Number);process.exit(a>22||(a===22&&b>=12)?0:1)"
+node -e "const [a,b]=process.versions.node.split(\".\").map(Number);process.exit(a>22||(a===22&&b>=14)?0:1)"
 if errorlevel 1 goto nonode
 
 where pnpm >nul 2>nul
@@ -20,6 +20,8 @@ if errorlevel 1 call npm install -g pnpm
 echo Installing dependencies (a few minutes the first time)...
 call pnpm install --frozen-lockfile
 if errorlevel 1 goto failed
+call pnpm --filter @ai-assistant/daemon check-native
+if errorlevel 1 goto failed
 echo Building the app...
 call pnpm --filter @ai-assistant/web build
 if errorlevel 1 goto failed
@@ -30,7 +32,7 @@ pause
 exit /b 0
 
 :nonode
-echo Node.js 22.12 or newer is needed: https://nodejs.org/
+echo Node.js 22.14 or newer is needed: https://nodejs.org/
 pause
 exit /b 1
 

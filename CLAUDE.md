@@ -21,7 +21,7 @@ Built and verified in a Linux sandbox: the mockup (an accepted draft), daemon, w
 - `docs/`: `PLAN`, `ARCHITECTURE`, `PRIVACY`, `PERSONA`, `CEREBRAL-SPACE`, `adr/0001-0008`, `reviews/`, `research/`. `spikes/` is parked hardware experiments.
 - Each package has a README with its details (`apps/daemon/README.md` is the long one: security model, terminal, stage).
 
-## Commands (pnpm 10, Node 22.12+)
+## Commands (pnpm 10, Node 22.14+)
 
 - `scripts/verify.sh` runs everything (typecheck, unit tests, build, smoke, three e2e scripts, orphan check) and prints a short table; `scripts/verify.sh quick` is typecheck + unit tests (about 1 minute). Details go to `.verify.log`.
 - Run the app: `start.cmd` (Windows) or `scripts/start.sh` (install, build, start, open the browser). By hand it is install, `pnpm --filter @ai-assistant/web build` (the daemon serves the built UI; without it it says "Web UI not built"), then the daemon start below.
@@ -44,6 +44,7 @@ Built and verified in a Linux sandbox: the mockup (an accepted draft), daemon, w
 - Test through the real path (real lane, broker, SQLite, browser), not only the unit. The fake Claude has triggers: "remember that ...", "send ...", "delete ...", "spend ...", "!error", "!crash".
 - Report what was verified and what was not, with numbers. Do not hedge things that were verified.
 - Gotchas: a `cd` in one Bash call carries into the next, so use absolute paths. Never `pkill -f` or `pgrep -f` with text that is in your own command line (it kills your shell). One `pnpm install` at a time (parallel installs corrupt `node_modules`). Zod 4 `z.record(enum, ...)` is exhaustive. The sandbox has Chromium with software WebGL only, and Desktop Commander here runs in the sandbox, not on the user's PC.
+- Native addons: better-sqlite3 ships prebuilt binaries and must never be in `onlyBuiltDependencies` (pnpm runs `node-gyp rebuild` for any allowed package with a `binding.gyp`; that failed on the owner's first Windows install, a PC with no C++ toolchain). Its binary is Node-API 10: Node 22.12 and 22.13 load it and then segfault on the first `new Database()`, so the minimum is 22.14. `apps/daemon/test/native-addons.test.ts` and `checkNative.test.ts` guard both, and the launchers run `pnpm --filter @ai-assistant/daemon check-native` after the install. node-pty has no Linux prebuilds, so it must stay allowed to build.
 - Independent reviews are worth their cost for security-sensitive changes (the last one found a real leak); keep their briefs narrow and tell the reviewer not to run e2e while verification runs.
 
 ## Where decisions live
