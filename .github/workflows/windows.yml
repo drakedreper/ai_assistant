@@ -143,6 +143,7 @@ jobs:
           foreach ($p in 'shared', 'agent-core', 'stage-core', 'daemon') {
             $out = pnpm --filter "@ai-assistant/$p" test 2>&1 | Out-String
             $code = $LASTEXITCODE
+            $out = $out -replace "$([char]27)\[[0-9;]*m", ''   # vitest colours its summary, which defeats the line patterns below
             $lines = $out -split "`r?`n"
             Write-Host "== $p (exit $code)"
             $lines | Where-Object { $_ -match '^\s*(Test Files|Tests)\s' } | ForEach-Object { Write-Host $_ }

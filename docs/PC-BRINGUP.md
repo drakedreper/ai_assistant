@@ -24,7 +24,7 @@ Not the owner's PC: a GitHub Actions `windows-latest` machine (Windows Server 20
 | Browser opening (`OPEN_BROWSER=1`, the default) | Edge was started with the sign-in link (first run). It used the one-time code before the check could, which is why the workflow now sets `OPEN_BROWSER=0` |
 | `pnpm -r typecheck` | **Passed**, all five projects |
 | Unit tests: shared, agent-core | **Passed** |
-| Unit tests: stage-core | 1,399 of 1,400 pass. The failure is a timeout, not an assertion: the 400-iteration property test in `wardrobe.hardening.test.ts` ("many runs of random catalog damage then restore") exceeded the 5 s default on the slower machine |
+| Unit tests: stage-core | 1,404 of 1,405 pass (commit ea3dbe6, which adds 5 locator-corpus tests: they pass). The failure is a timeout, not an assertion: the 400-iteration property test in `wardrobe.hardening.test.ts` ("many runs of random catalog damage then restore") exceeded the 5 s default on the slower machine |
 | Unit tests: daemon | **506 failures in 22 files, not product bugs as far as seen.** The first failure, and the only error text read, is the same in every sampled test: the test harness (`test/helpers.ts`, `testConfig`) pretends the platform is `linux`, so `config.ts` resolves the temporary data directory with POSIX path rules and `C:\Users\...\Temp\daemon-test-x` becomes `D:\a\...\apps\daemon\C:\Users\...` (ENOENT in `writeSecretsFile`). The real daemon uses its real platform and ran fine in the launcher check. Whether other causes hide behind this one is not known |
 | smoke (Chromium 153, Playwright 1.63.0) | **26 of 26** |
 | e2e-daemon | **37 of 37** (sign-in, cookie, WebSocket, memory panel in a real browser) |
