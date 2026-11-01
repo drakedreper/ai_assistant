@@ -18,7 +18,7 @@ The daemon owns the character; Unity renders it and reports back (`mira-stage/1`
 
 ## What is verified, and what is not
 
-Verified in the Linux sandbox (and again by [`.github/workflows/unity-stage.yml`](../.github/workflows/unity-stage.yml) on a clean Linux runner):
+Verified in the Linux sandbox, again by [`.github/workflows/unity-stage.yml`](../.github/workflows/unity-stage.yml) on a clean Linux runner, and by [`windows.yml`](../.github/workflows/windows.yml) on a GitHub Windows runner (165 of 165 C# tests passed there too, the live ones included):
 
 | | how |
 |---|---|
@@ -30,7 +30,7 @@ Verified in the Linux sandbox (and again by [`.github/workflows/unity-stage.yml`
 
 Mutation-checked: each of these suites fails when the code it guards is broken (client without hello, without reconnect, daemon accepting a second stage, seven ways to break the locator port, eight ways to break the expression mapper).
 
-**Not verified:** a Unity Editor or player (the runtime files are compiled by `dotnet` as C# 9 on .NET Standard 2.1, the language level Unity 6 has, but Unity's own compiler has not seen them), UniVRM, a GPU, frame rate, how any expression looks, the audio path in Unity, IL2CPP builds, Windows. The daemon side is also unmeasured against a real TTS or Audio2Face provider (only deterministic fakes exist).
+**Not verified:** a Unity Editor or player (the runtime files are compiled by `dotnet` as C# 9 on .NET Standard 2.1, the language level Unity 6 has, but Unity's own compiler has not seen them), UniVRM, a GPU, frame rate, how any expression looks, the audio path in Unity, IL2CPP builds, and the owner's own PC (only a GitHub Windows runner has run the C# tests). The daemon side is also unmeasured against a real TTS or Audio2Face provider (only deterministic fakes exist).
 
 ## Layout
 
