@@ -24,6 +24,7 @@ Built and verified in a Linux sandbox: the mockup (an accepted draft), daemon, w
 ## Commands (pnpm 10, Node 22.12+)
 
 - `scripts/verify.sh` runs everything (typecheck, unit tests, build, smoke, three e2e scripts, orphan check) and prints a short table; `scripts/verify.sh quick` is typecheck + unit tests (about 1 minute). Details go to `.verify.log`.
+- Run the app: `start.cmd` (Windows) or `scripts/start.sh` (install, build, start, open the browser). By hand it is install, `pnpm --filter @ai-assistant/web build` (the daemon serves the built UI; without it it says "Web UI not built"), then the daemon start below.
 - One suite: `pnpm --filter @ai-assistant/daemon exec vitest run test/<file>` (same for `agent-core`, `stage-core`, `shared`).
 - E2E: `node apps/web/scripts/e2e-stage.mjs` (also `e2e-daemon`, `e2e-terminal`, `smoke`). Run them one at a time.
 - Run the daemon: `pnpm --filter @ai-assistant/daemon start` (prints a sign-in link). Env: `CLAUDE_BACKEND=fake|sdk`, `CLAUDE_AUTH_MODE`, `CLAUDE_CONVERSATION=fresh-daily|resume`, `DATA_DIR`, `DAEMON_PORT` (7421).

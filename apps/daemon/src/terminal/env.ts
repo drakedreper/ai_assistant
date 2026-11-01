@@ -10,7 +10,7 @@
  *   1. Prefixes owned by this product are removed whatever follows: DAEMON_*, AI_ASSISTANT_* (the hook token
  *      variable of `hooks install`), AIA_*, MIRA_*.
  *   2. Every variable of the daemon's own configuration table is removed: DATA_DIR, DEV_ORIGINS, WEB_DIST,
- *      CLAUDE_BACKEND, CLAUDE_AUTH_MODE, CLAUDE_CONVERSATION, DEMO, LOG_LEVEL, RETENTION_DAYS, BUDGET_*, STALE_*, TERMINAL_*.
+ *      CLAUDE_BACKEND, CLAUDE_AUTH_MODE, CLAUDE_CONVERSATION, OPEN_BROWSER, DEMO, LOG_LEVEL, RETENTION_DAYS, BUDGET_*, STALE_*, TERMINAL_*.
  *   3. ANTHROPIC_API_KEY is removed. The daemon reads it for its own chat lane (with a budget). The user's own
  *      `claude` in a terminal signs in by itself (subscription login, or a key the user sets inside that terminal),
  *      so the daemon never hands its key to it and never silently switches a subscription login to API billing.
@@ -46,6 +46,7 @@ const DAEMON_CONFIG_NAMES = new Set([
   'CLAUDE_BACKEND',
   'CLAUDE_AUTH_MODE',
   'CLAUDE_CONVERSATION',
+  'OPEN_BROWSER',
   'DEMO',
   'LOG_LEVEL',
   'RETENTION_DAYS',

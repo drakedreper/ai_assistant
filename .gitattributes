@@ -1,0 +1,4 @@
+# Line endings that must not be converted by git on Windows (autocrlf), or the scripts break.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.sh text eol=lf

@@ -5,6 +5,7 @@ import { formatBanner } from './banner'
 import { ConfigError, describeConfig, loadConfig } from './config'
 import { createLogger } from './log'
 import { ensurePrivateDir } from './security'
+import { openBrowser } from './openBrowser'
 
 async function main(): Promise<void> {
   // When the console that started the daemon goes away (SIGHUP) its streams start failing with EIO or EPIPE: that must not
@@ -74,6 +75,9 @@ async function main(): Promise<void> {
       '',
     ].join('\n')}\n`,
   )
+
+  // start.cmd and scripts/start.sh set OPEN_BROWSER=1: open the sign-in link in the default browser (best effort, the link is printed anyway).
+  if (process.env.OPEN_BROWSER === '1') openBrowser(info.exchangeUrl)
 
   let shuttingDown = false
   const shutdown = (signal: string): void => {
