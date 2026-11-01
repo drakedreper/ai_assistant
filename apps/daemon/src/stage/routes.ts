@@ -79,6 +79,17 @@ export function registerStageRoutes(app: Hono, deps: StageRouteDeps): StageActio
     return fail(c, 426, 'upgrade_required', 'Use a WebSocket connection.')
   })
 
+  // ---- her memory: inspect and forget. Works with the stage switched off (see StageActions.listMemory).
+  app.get(DaemonRoutes.stageMemory, (c) => {
+    c.header('Cache-Control', 'no-store')
+    return c.json(actions.listMemory())
+  })
+  // Forgetting EVERYTHING must be asked for by name, so a stray DELETE on the collection URL cannot wipe it.
+  app.delete(DaemonRoutes.stageMemory, (c) =>
+    c.req.query('confirm') === 'all' ? reply(c, actions.forgetAllMemory()) : fail(c, 400, 'confirm_required', 'This forgets everything she remembers. Add ?confirm=all to do that on purpose.'),
+  )
+  app.delete('/api/stage/memory/:id', (c) => reply(c, actions.forgetMemory(c.req.param('id'))))
+
   // ---- the switch and the connection
   app.on(['PUT', 'POST'], DaemonRoutes.stageEnabled, async (c) => {
     const b = await readBody(c, OnOffRequest)

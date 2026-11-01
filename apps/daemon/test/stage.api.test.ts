@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { ServerEvent, StageSnapshot, Snapshot } from '@ai-assistant/shared'
+import { ServerEvent, StageMemoryList, StageSnapshot, Snapshot } from '@ai-assistant/shared'
 import { json, makeDaemon, type TestDaemon } from './helpers'
 
 const open: TestDaemon[] = []
@@ -102,6 +102,9 @@ describe('the request gate on every stage route', () => {
     ['PUT', '/api/stage/scene/objects/x', { visible: false }],
     ['DELETE', '/api/stage/scene/objects/x'],
     ['PUT', '/api/stage/scene/camera', { shot: 'wide' }],
+    ['GET', '/api/stage/memory'],
+    ['DELETE', '/api/stage/memory?confirm=all'],
+    ['DELETE', '/api/stage/memory/x'],
   ]
 
   it('refuses without the session cookie (401), also with the stage token', async () => {
@@ -624,3 +627,142 @@ describe('audit, events and secrets', () => {
     expect(d.daemon.stage.hub.revision()).toBe(rev)
   })
 })
+
+describe('her memory: inspect and forget', () => {
+  type Kind = 'episode' | 'relationship' | 'preference'
+  /** Write through the same service the character_remember tool uses; a minute passes between writes so "newest first" is exact. */
+  const remember = (d: TestDaemon, input: { kind: Kind; text: string; importance?: number; sensitivity?: 'normal' | 'private' | 'sensitive' }): string => {
+    const r = d.daemon.stage.hub.memory.remember(input)
+    expect(r.ok, JSON.stringify(r)).toBe(true)
+    d.clock.advance(60_000)
+    return (r as { ok: true; value: { item: { id: string } } }).value.item.id
+  }
+  const list = async (d: TestDaemon) => {
+    const r = await d.call('/api/stage/memory')
+    expect(r.status).toBe(200)
+    return StageMemoryList.parse(await r.json())
+  }
+  const digest = (d: TestDaemon) => d.daemon.stage.hub.memory.digest({ audience: 'cloud', maxChars: 900 }).text
+
+  it('is empty at first, is never cached, and the empty list validates', async () => {
+    const d = await daemon()
+    const r = await d.call('/api/stage/memory')
+    expect(r.status).toBe(200)
+    expect(r.headers.get('cache-control')).toBe('no-store')
+    expect(StageMemoryList.parse(await r.json())).toEqual({ total: 0, items: [], bySensitivity: { normal: 0, private: 0, sensitive: 0 } })
+  })
+
+  it('lists what she wrote down, newest first, with its labels', async () => {
+    const d = await daemon()
+    const a = remember(d, { kind: 'preference', text: 'Likes the camera wide while she works', importance: 3 })
+    const b = remember(d, { kind: 'relationship', text: 'Calls the user by a shortened name', importance: 4 })
+    const c = remember(d, { kind: 'episode', text: 'Had a hard conversation about a family matter', importance: 5, sensitivity: 'sensitive' })
+    const l = await list(d)
+    expect(l.total).toBe(3)
+    expect(l.items.map((i) => i.id)).toEqual([c, b, a])
+    expect(l.items[0]).toMatchObject({ kind: 'episode', sensitivity: 'sensitive', importance: 5 })
+    expect(l.items[0]?.text).toContain('family matter') // it is your own data: you see all of it
+    expect(l.bySensitivity.sensitive).toBe(1)
+    expect(l.bySensitivity.normal + l.bySensitivity.private).toBe(2)
+    expect(Date.parse(l.items[0]!.createdAt)).toBeGreaterThan(Date.parse(l.items[2]!.createdAt))
+  })
+
+  it('forgets one item: gone from the list and from her prompt, and the audit says what kind went, not what it said', async () => {
+    const d = await daemon()
+    const keep = remember(d, { kind: 'preference', text: 'Likes the camera wide while she works', importance: 3 })
+    const drop = remember(d, { kind: 'preference', text: 'Prefers tea over coffee in the morning', importance: 3 })
+    expect(digest(d)).toContain('tea over coffee')
+    const r = await d.call(`/api/stage/memory/${drop}`, { method: 'DELETE' })
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as { result: { forgotten: number } }).result.forgotten).toBe(1)
+    expect((await list(d)).items.map((i) => i.id)).toEqual([keep])
+    expect(digest(d)).not.toContain('tea over coffee')
+    expect(d.daemon.stage.hub.memoryDigest() ?? '').not.toContain('tea over coffee')
+    const audit = d.daemon.store.listAudit(50)
+    expect(audit.some((a) => /Forgot something she remembered/.test(a.action) && a.outcome === 'auto' && /preference/.test(a.detail ?? ''))).toBe(true)
+    expect(JSON.stringify(audit)).not.toContain('tea over coffee')
+  })
+
+  it('answers 404 for something she does not remember and touches nothing else', async () => {
+    const d = await daemon()
+    const keep = remember(d, { kind: 'preference', text: 'Likes the camera wide while she works' })
+    const r = await d.call('/api/stage/memory/mem.ghost', { method: 'DELETE' })
+    expect(r.status).toBe(404)
+    expect((await err(r)).error).toBe('not_found')
+    expect((await list(d)).items.map((i) => i.id)).toEqual([keep])
+  })
+
+  it('forgetting everything has to be asked for by name; then it removes all of it and says how many', async () => {
+    const d = await daemon()
+    remember(d, { kind: 'preference', text: 'Likes the camera wide while she works' })
+    remember(d, { kind: 'relationship', text: 'Calls the user by a shortened name' })
+    const bare = await d.call('/api/stage/memory', { method: 'DELETE' })
+    expect(bare.status).toBe(400)
+    expect((await err(bare)).error).toBe('confirm_required')
+    expect((await list(d)).total).toBe(2)
+    const wrong = await d.call('/api/stage/memory?confirm=yes', { method: 'DELETE' })
+    expect(wrong.status).toBe(400)
+    expect((await list(d)).total).toBe(2)
+    const r = await d.call('/api/stage/memory?confirm=all', { method: 'DELETE' })
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as { result: { forgotten: number } }).result.forgotten).toBe(2)
+    expect((await list(d)).total).toBe(0)
+    expect(d.daemon.stage.hub.memoryDigest()).toBeUndefined()
+    expect(d.daemon.store.listAudit(50).some((a) => /Forgot everything she remembered/.test(a.action) && a.detail === '2 items')).toBe(true)
+  })
+
+  it('works while the stage is switched off, although other stage changes are refused then', async () => {
+    const d = await daemon()
+    const id = remember(d, { kind: 'preference', text: 'Likes the camera wide while she works' })
+    remember(d, { kind: 'relationship', text: 'Calls the user by a shortened name' })
+    expect((await d.call('/api/settings/stage', { method: 'PUT', json: { on: false } })).status).toBe(200)
+    expect((await d.call('/api/stage/scene/camera', { method: 'PUT', json: { shot: 'wide' } })).status).toBe(409)
+    expect((await list(d)).total).toBe(2)
+    expect((await d.call(`/api/stage/memory/${id}`, { method: 'DELETE' })).status).toBe(200)
+    expect((await d.call('/api/stage/memory?confirm=all', { method: 'DELETE' })).status).toBe(200)
+    expect((await list(d)).total).toBe(0)
+  })
+
+  it('shows an older stored row safely: a secret is masked, an unknown label counts as sensitive, odd numbers are clamped', async () => {
+    const d = await daemon()
+    const repo = d.daemon.stage.hub.stageStore.memoryRepo()
+    repo.insert({ id: 'mem.old', kind: 'odd' as Kind, text: 'the key is sk-ant-api03-abcdefghijklmnop1234 ok', importance: 9, sensitivity: 'odd' as 'normal', tags: ['a'], createdAt: T_OLD, updatedAt: T_OLD, recallCount: 0 })
+    const l = await list(d)
+    const old = l.items.find((i) => i.id === 'mem.old')!
+    expect(old.text).not.toContain('abcdefghijklmnop1234')
+    expect(old).toMatchObject({ kind: 'episode', sensitivity: 'sensitive', importance: 5 })
+    expect(l.bySensitivity.sensitive).toBe(1)
+    expect(JSON.stringify(l)).not.toContain('abcdefghijklmnop1234')
+  })
+
+  it('one odd stored row never breaks the list or the way to forget it: a timestamp Date cannot hold, a huge text, a bad importance', async () => {
+    const d = await daemon()
+    const repo = d.daemon.stage.hub.stageStore.memoryRepo()
+    const fine = remember(d, { kind: 'preference', text: 'Likes the camera wide while she works' })
+    repo.insert({ id: 'mem.weird', kind: 'episode', text: 'x'.repeat(5000), importance: 0, sensitivity: 'normal', tags: Array.from({ length: 30 }, (_, i) => `t${i}`.repeat(30)), createdAt: Number.MAX_SAFE_INTEGER, updatedAt: -Number.MAX_SAFE_INTEGER, recallCount: 0 })
+    const r = await d.call('/api/stage/memory')
+    expect(r.status).toBe(200)
+    const l = StageMemoryList.parse(await r.json()) // still validates against the schema the web client uses
+    expect(l.total).toBe(2)
+    const weird = l.items.find((i) => i.id === 'mem.weird')!
+    expect(weird.text.length).toBeLessThanOrEqual(500)
+    expect(weird.importance).toBe(1)
+    expect(weird.tags).toHaveLength(8)
+    expect(Date.parse(weird.createdAt)).toBe(0)
+    expect((await d.call('/api/stage/memory/mem.weird', { method: 'DELETE' })).status).toBe(200) // and it can be forgotten
+    expect((await list(d)).items.map((i) => i.id)).toEqual([fine])
+  })
+
+  it('returns at most the newest 500 items and still reports the true total', async () => {
+    const d = await daemon()
+    const repo = d.daemon.stage.hub.stageStore.memoryRepo()
+    for (let i = 0; i < 520; i++) repo.insert({ id: `mem.bulk-${String(i).padStart(4, '0')}`, kind: 'episode', text: `moment ${i}`, importance: 1, sensitivity: 'normal', tags: [], createdAt: T_OLD + i * 1000, updatedAt: T_OLD + i * 1000, recallCount: 0 })
+    const l = await list(d)
+    expect(l.total).toBe(520)
+    expect(l.items).toHaveLength(500)
+    expect(l.items[0]?.id).toBe('mem.bulk-0519')
+    expect(l.items[499]?.id).toBe('mem.bulk-0020')
+  })
+})
+
+const T_OLD = Date.parse('2026-10-01T09:00:00.000Z')

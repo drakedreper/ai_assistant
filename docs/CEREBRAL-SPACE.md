@@ -1,6 +1,6 @@
 # The cerebral space
 
-Status: draft concept, 2026-10-31. Written from the user's brief and six reference screenshots. Nothing here is built in an engine yet.
+Status: draft concept, 2026-10-31. Written from the user's brief and six reference screenshots. Nothing here is built in an engine yet. As of 2026-11-01 the backend half exists: the void preset, the six camera shots, the data constructs and the presence style are implemented in `packages/stage-core` and exercised by a headless simulator stage and the three.js draft room, not by a renderer that draws this look.
 
 ## The vision, in the user's words
 

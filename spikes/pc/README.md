@@ -2,9 +2,7 @@
 
 To run all of this with Claude Code on the PC, paste [KICKOFF-PROMPT.md](KICKOFF-PROMPT.md); background and risks are in [docs/PC-BRINGUP.md](../../docs/PC-BRINGUP.md).
 
-Status: draft, 2026-10-31. Nothing here has been run on the user's PC yet. Run-through requires the PC to be connected to the
-Claude session through Remote Control (Claude Desktop app: Settings, Claude Code, Remote Control; or `claude remote-control`
-in a terminal in the repo folder) or the user running the commands and pasting the output.
+Status: draft, updated 2026-11-01. Nothing here has been run on the user's PC yet. The agreed route (2026-10-31): the user runs Claude Code on the PC with the kickoff prompt, because the cloud session cannot reach it (Remote Control listed no computer). The fallback is the user running the commands and pasting the output.
 
 ## Order
 

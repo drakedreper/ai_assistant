@@ -12,6 +12,7 @@ import { Callout, SectionHeader, SettingRow } from './Atoms'
 import { RangeStyles } from './Range'
 import { Switch } from './Switch'
 import { AppearancePanel } from './StageAppearance'
+import { MemoryPanel } from './StageMemory'
 import { MoodPanel, PresencePanel } from './StagePresence'
 import { CatalogPanel, ScenePanel } from './StageScene'
 import { StageNotice, useSelectedCharacter, useStageAction, useStageUi } from './StageShared'
@@ -209,6 +210,7 @@ export function StageSection() {
             </SettingRow>
             <StageNotice error={switchError} />
           </Panel>
+          <MemoryPanel />
           {snap.enabled ? (
             <Loaded snap={snap} />
           ) : (

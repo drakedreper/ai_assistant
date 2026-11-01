@@ -1,6 +1,6 @@
 # ADR 0008: Stage protocol and engine choice
 
-Status: Proposed (draft, 2026-10-31). Decision on Unity vs Unreal is pending the user's reference material and a Windows GPU spike.
+Status: Proposed (draft, 2026-10-31). Decision 1 (the backend owns the character, engines are replaceable stages) is implemented and reviewed as of 2026-11-01 (see the update at the end). The Unity vs Unreal choice (decision 3) is still pending the user's reference material and a Windows GPU spike.
 
 ## Context
 
@@ -45,3 +45,11 @@ The current room is a three.js scene in the browser. It stays as a draft stage, 
 ## Update 2026-10-31: references and the cerebral space
 
 The user supplied six reference screenshots (a character creator stage, with DLSS visible) and a brief: an empty "cerebral space" where a representation of the user and the second brain live, connected to the terminal; a character that is athletic and intelligent, meeting in authority. The concept, the art direction read from the references and the mapping from app data to space objects are in [docs/CEREBRAL-SPACE.md](../CEREBRAL-SPACE.md). The contract gained `DataConstruct` (knowledge graph, session orbit, terminal pane and others), `Atmosphere` (the void look), a `user` character role and `PresenceStyle`. The references look like an Unreal-class pipeline, which strengthens the Unreal recommendation, but the decision still waits for a spike on the RTX 5070 Ti.
+
+## Update 2026-11-01: the backend side of decision 1 is built
+
+`packages/stage-core` (pure logic, no engine) and its wiring in `apps/daemon/src/stage` implement the contract: asset catalog with enforced licences, characters with adult-bounded morph ranges, wardrobe with a clothed baseline and an OutfitDirector, the cerebral-void scene and its six camera shots, data constructs (knowledge graph, session orbit and others) with a deterministic layout, a mood model and a behaviour director shaped by the presence style, a speech pipeline (text to audio and ARKit-52 face frames over one clock), her character memory, and the `/ws/stage` socket with its own token. A headless `SimulatorStage` and a reusable conformance suite (`runStageConformance`) stand in for an engine; any Unreal or Unity stage has to pass the same suite. An adversarial review of the contract and the services found no critical flaw and all findings are closed ([review record](../reviews/2026-11-01-terminal-and-stage.md)).
+
+What this does not decide or prove: the engine, the realism of anything on screen, whether a stage can hold the frame budget on the RTX 5070 Ti, how a real TTS or Audio2Face-3D provider behaves behind the `TtsProvider` and `FaceProvider` seams (only deterministic fakes exist), and Windows behaviour. Known limits of the contract: there is no `character.unload` command (a stage keeps a character until it disconnects), and the adult envelope judges visible metadata only, so it assumes content packs the user chose to install (the seed catalog is metadata only and ships no binary assets).
+
+The engine decision still follows the order in the open questions above: the user's reference material, then a spike on the RTX 5070 Ti with the proposed gates (60 fps at 1440p with one character and a small scene, outfit swap under 1 s, audio-to-lip latency under about 120 ms).

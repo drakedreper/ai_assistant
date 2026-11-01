@@ -1,6 +1,6 @@
-import type { CharacterProfile, OutfitPreset, PresenceStyle, SceneObject, StageOutfitSuggestion, WardrobeSlot } from '@ai-assistant/shared'
+import { STAGE_MEMORY_LIST_LIMIT, type CharacterProfile, type OutfitPreset, type PresenceStyle, type SceneObject, type StageMemoryItem, type StageMemoryList, type StageOutfitSuggestion, type WardrobeSlot } from '@ai-assistant/shared'
 import type { StageOutfitSuggestRequest, StagePresenceRequest, StageSceneObjectAddRequest, StageSceneObjectUpdateRequest } from '@ai-assistant/shared'
-import { quatFromYaw, roundQuat, type CommandDraft, type ObjectInput, type ObjectPatch } from '@ai-assistant/stage-core'
+import { quatFromYaw, roundQuat, type CommandDraft, type MemoryItem, type ObjectInput, type ObjectPatch } from '@ai-assistant/stage-core'
 import { redactText } from '../store/redact'
 import type { StageHub } from './hub'
 
@@ -280,6 +280,50 @@ export class StageActions {
     this.hub.audit({ action: `Moved the camera to ${shot}`, target: 'Stage', outcome: 'auto' })
     this.hub.changed('camera')
     return this.done({ shot }, r.value.commands)
+  }
+
+  // ---------------------------------------------------------------------------------------------- memory
+
+  // Seeing and deleting what she remembers never checks the stage switch: "her data stays while the stage is off" is only
+  // true if you can always inspect and erase it. Reading is not audited (it is your own screen); every deletion is, and the
+  // audit line says what kind of thing went, never what it said.
+
+  /** What she remembers, newest first. Stored text is masked against secrets again on the way out (an older store may hold what today's rules would refuse). */
+  listMemory(): StageMemoryList {
+    const all = this.hub.memory.list() // oldest first
+    const bySensitivity = { normal: 0, private: 0, sensitive: 0 }
+    // This list is also the way to find something in order to forget it, so one odd stored row must never break it: a
+    // timestamp Date cannot represent would make toISOString() throw and hide every item.
+    const iso = (ms: number): string => (Number.isFinite(ms) && Math.abs(ms) <= 8.64e15 ? new Date(ms).toISOString() : new Date(0).toISOString())
+    const view = (i: MemoryItem): StageMemoryItem => {
+      // a row with a label this code does not know is treated as the most protected one, like the digest does
+      const sensitivity = i.sensitivity === 'normal' || i.sensitivity === 'private' ? i.sensitivity : 'sensitive'
+      return {
+        id: i.id,
+        kind: i.kind === 'relationship' || i.kind === 'preference' ? i.kind : 'episode',
+        text: redactText(i.text, 500).slice(0, 500),
+        importance: Math.min(5, Math.max(1, Math.round(Number.isFinite(i.importance) ? i.importance : 1))),
+        sensitivity,
+        tags: i.tags.slice(0, 8).map((t) => t.slice(0, 40)),
+        createdAt: iso(i.createdAt),
+        updatedAt: iso(i.updatedAt),
+      }
+    }
+    for (const i of all) bySensitivity[i.sensitivity === 'normal' || i.sensitivity === 'private' ? i.sensitivity : 'sensitive']++
+    return { total: all.length, items: all.slice(-STAGE_MEMORY_LIST_LIMIT).reverse().map(view), bySensitivity }
+  }
+
+  forgetMemory(id: string): ActionResult<{ forgotten: number }> {
+    const item = this.hub.memory.get(id)
+    if (!item || !this.hub.memory.forget(id)) return fail(404, 'not_found', 'She does not remember that any more.')
+    this.hub.audit({ action: 'Forgot something she remembered', target: 'Her memory', outcome: 'auto', detail: `${item.kind}, ${item.sensitivity}` })
+    return { ok: true, value: { forgotten: 1 }, sent: 0 }
+  }
+
+  forgetAllMemory(): ActionResult<{ forgotten: number }> {
+    const n = this.hub.memory.forgetWhere(() => true)
+    this.hub.audit({ action: 'Forgot everything she remembered', target: 'Her memory', outcome: 'auto', detail: `${n} item${n === 1 ? '' : 's'}` })
+    return { ok: true, value: { forgotten: n }, sent: 0 }
   }
 
   // ---------------------------------------------------------------------------------------------- catalog

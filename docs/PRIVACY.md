@@ -1,6 +1,6 @@
 # Privacy specification
 
-Status: draft specification for review; the mockup shows the data-flow map, audit log and Guest mode in Settings on fixture data only. Date: 2026-10-31.
+Status: draft specification for review; the mockup shows the data-flow map, audit log and Guest mode in Settings on fixture data only. Date: 2026-10-31. Updated 2026-11-01 with rows and rules for her character memory, the embedded terminal and the stage connection, which now exist in the daemon (sections 3, 9, 10 and 13).
 
 This document says what leaves the PC, under whose terms, and what the product does to minimise and record it. It is not legal advice. Items marked "unverified" came from research that could not reach primary sources; items marked "proposed" are design choices.
 
@@ -43,6 +43,9 @@ Retention and handling of data on Anthropic's side are governed by those terms a
 | Weather | City name | Open-Meteo | Coordinates or city for the forecast | Data licensed CC BY 4.0 (attribution required) |
 | Google data (Calendar, Gmail, Contacts) | Fetched to the PC | Google, directly | The daemon calls Google's APIs with the user's own OAuth client; Anthropic sees only what a tool passes on | Tokens in Windows Credential Manager |
 | Hook payloads and transcripts | No | Stay local | Claude Code session data observed by the monitor; plaintext, may include secrets and file contents | Redacted before persisting; receiver bound to loopback |
+| Her character memory (stage) | Only a short digest | Anthropic (Secretary lane), only with the real Claude backend (`CLAUDE_BACKEND=sdk`); nothing leaves with the fake backend | A digest of at most about 900 characters of what she wrote down with `character_remember`: relationship facts, preferences and recent moments, each quoted as data. Only items labelled `normal` are included; text that looks like a secret is refused when written; private and sensitive items are never added to the digest (the text she passed to the tool was, of course, in the conversation that wrote it) | Visible and deletable in Settings, Stage ("What she remembers"); every deletion is audited without the text |
+| Embedded terminal | Not through this app | Whatever program you run in it | Keystrokes and output pass between your browser, the daemon and the PTY on this PC. They are never logged, never written to disk (the scrollback lives in memory) and never given to any Claude lane or tool. A `claude` you start there talks to Anthropic under its own login and terms | Off until you switch it on in Settings; every open and close is audited, keystrokes never |
+| Stage connection (engine or simulator) | No | A process on this PC, over loopback | Character, wardrobe, scene and mood state, speech audio and face frames, and for the cerebral space the titles and paths of your notes (not their bodies) and the titles and status of your Claude sessions, so the constellation and the orbit can be labelled | One stage at a time, with its own token. Titles of `sensitive` notes are included today (open item 6 in section 13) |
 | Telemetry | Avoid | Google (MediaPipe), others | MediaPipe Tasks send usage metrics to Google by default; Claude Code OTel attributes include `user.email`; claude-view official builds send anonymous telemetry | Self-host MediaPipe assets and check egress; OTel off; do not run claude-view builds with telemetry on |
 
 The mockup's `PrivacyFlow` list (10 rows) and each `IntegrationStatus.dataLeaves` string are the UI form of this table; keep them in sync.
@@ -98,6 +101,8 @@ The daemon calls Google's APIs itself with the user's own OAuth client (desktop 
 
 - The vault and the ops database are unencrypted by default; rely on BitLocker. Secrets sit in the keychain. Logs are redacted. An encrypted-at-rest option is a later question.
 - Claude Code transcripts under `~\.claude\projects` are plaintext, include tool output and anything a command prints (secrets included), and are retained 30 days by default (`cleanupPeriodDays`). The Secretary session persists so it can resume, so its transcript holds chat and tool results (note and mail snippets). Treat that folder as a sensitive store.
+- Her character memory sits in the ops database (table `stage_memory`) in plaintext like the rest of it. The database runs with `secure_delete` on, so a deleted row is overwritten in the file instead of only being unlinked (tested, with a control that shows the text lingers without it).
+- The daemon's `secrets.json` (the hook token and the stage token, among others) is created owner-only (mode 0600) on POSIX systems (tested on Linux). On Windows the permission bits do nothing and it relies on the default access rules of the user's profile folder (`%APPDATA%`). Not verified on the PC yet.
 - The loopback-only daemon and its token protect against other websites; they do not protect against other software running as the same user.
 
 ## 10. "Forget" semantics
@@ -115,6 +120,7 @@ Details
 - Rewriting history breaks any clone or remote. The vault has no remote by default; if one is added, erase requires a coordinated force-push.
 - `raw/` and the journal are immutable by policy. Erase is a deliberate exception that needs a typed confirmation in the UI and an audit tombstone.
 - Secondbrain items are a read-only mirror; forgetting the source happens in that app.
+- Her character memory: Settings, Stage, "What she remembers" lists every item with its kind and privacy label and forgets one item or all of it, also while the stage is switched off. The row is deleted and overwritten in the database file, and the audit log records that something was forgotten and of what kind, never what it said. It does not reach a Claude conversation that is already open (it keeps what it was told until it restarts), Claude Code's own transcript of past turns under `~\.claude\projects` (which holds the text she passed to `character_remember`), backups, or anything the drive itself retains. Like the rest of this section, deleting it from the app is not the same as erasing every copy.
 - A "forget" of intimate or companion memory follows the same levels and defaults to excluding it from all cloud-bound context immediately.
 
 ## 11. Guest mode
@@ -138,3 +144,5 @@ Research flagged a possible EU or Nordic context from indirect hints; it is not 
 3. Residence and GDPR position (section 12).
 4. Whether the vault may ever have a remote, which complicates "erase".
 5. Backup destination and rotation period, which sets how long forgotten data persists offsite.
+6. Note titles on the stage: the knowledge constellation sends the title and path of every note, `sensitive` ones included, to the stage process on this PC (the notes are sample notes today). Proposed default once the real vault exists: leave `sensitive` notes out of the constructs. A third-party engine plugin is the realistic risk, because the stage process is the one component that may be someone else's code.
+7. Two memories: Settings, Memory (what she has learned about you) and Settings, Stage ("What she remembers", her character memory) are separate stores today. Decide whether they merge when the real vault exists, so there is one place to inspect and forget.

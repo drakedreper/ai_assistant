@@ -601,6 +601,10 @@ export function openStore(opts: OpenStoreOptions): Store {
     db.pragma('foreign_keys = ON')
     db.pragma(`busy_timeout = ${Math.trunc(opts.busyTimeoutMs ?? 5000)}`)
     db.pragma('synchronous = NORMAL')
+    // Forgetting is real (docs/PRIVACY.md section 10): without this, SQLite only unlinks a deleted row and its text stays in
+    // the file's free space until something overwrites it. With it, deleted content is zeroed. It does not reach backups, a
+    // write-ahead log that has not been checkpointed yet, Claude Code's own transcripts, or what the drive itself retains.
+    db.pragma('secure_delete = ON')
     migrate(db)
   } catch (err) {
     db.close()

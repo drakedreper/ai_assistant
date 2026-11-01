@@ -4,6 +4,7 @@ import {
   StageAssetRegisterRequest,
   StageCameraRequest,
   StageEquipRequest,
+  StageMemoryList,
   StageOutfitApplyRequest,
   StageOutfitSaveRequest,
   StageOutfitSuggestRequest,
@@ -121,6 +122,16 @@ export const stageClient = {
   removeObject: (objectId: string) => call('DELETE', DaemonRoutes.stageSceneObject(objectId)) as Promise<StageMutation>,
   setCamera: (shot: string) => call('PUT', DaemonRoutes.stageCamera, req(StageCameraRequest, { shot })) as Promise<StageMutation>,
   registerAsset: (manifest: Record<string, unknown>) => call('POST', DaemonRoutes.stageAssets, req(StageAssetRegisterRequest, { manifest })) as Promise<StageMutation>,
+  /** What she remembers, newest first. Works while the stage is switched off. */
+  async listMemory(): Promise<StageMemoryList> {
+    const data = await call('GET', DaemonRoutes.stageMemory)
+    const parsed = StageMemoryList.safeParse(data)
+    if (!parsed.success) throw new StageApiError(0, 'protocol', 'The daemon returned a memory list this app does not understand. Rebuild the web app.')
+    return parsed.data
+  },
+  forgetMemory: (id: string) => call('DELETE', DaemonRoutes.stageMemoryItem(id)) as Promise<StageMutation<{ forgotten: number }>>,
+  /** Everything she remembers. The daemon insists on ?confirm=all so this cannot happen by accident. */
+  forgetAllMemory: () => call('DELETE', `${DaemonRoutes.stageMemory}?confirm=all`) as Promise<StageMutation<{ forgotten: number }>>,
 }
 
 /** A sentence a person can read for a failed stage call. */

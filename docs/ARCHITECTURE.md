@@ -235,7 +235,7 @@ Filesystem and platform
 | Power | Sleep and hibernate break timers and sockets: catch-up for jobs, `resume` for the WebSocket |
 | Media | Camera exclusivity with Teams or Zoom; audio device selection; speaker echo (AEC) for barge-in, hence headphones or push-to-talk first |
 | GPU | Vendor and VRAM unknown beyond "NVIDIA". 3D render, STT, TTS, embeddings and MediaPipe share it; cap the Room at 30 fps and pause when hidden |
-| Native addons | better-sqlite3 and keyring need per-platform builds; build on a Windows CI runner from day one. node-pty uses ConPTY (only if the optional terminal panel is built) |
+| Native addons | better-sqlite3 and keyring need per-platform builds; build on a Windows CI runner from day one. node-pty uses ConPTY. The terminal is built (`apps/daemon/src/terminal`) and runs node-pty in one host process per terminal, never in the daemon. Neither addon has been built or run on Windows yet |
 | Distribution | SmartScreen and code signing matter only if an installer is shared |
 | Secure context | `http://localhost` and `http://127.0.0.1` count as secure contexts, so `getUserMedia` works over plain http in the browser-first build (from memory; the MDN page was unreachable) |
 
@@ -288,7 +288,7 @@ A local git vault and one SQLite file are one disk failure from total loss.
 
 ## 16. Repository layout
 
-Now: `apps/web`, `packages/shared`, `docs`, `spikes`. Phase 1 adds `apps/daemon`. Add `vault`, `integrations` or `db` packages only when a second consumer exists. One mock mechanism only (in-app fixtures), no TypeSpec, Prism or MSW stack. Phase 4 adds `apps/desktop` for the Electron shell.
+Now: `apps/web`, `apps/daemon`, `packages/shared`, `packages/agent-core` (the Claude lanes), `packages/stage-core` (the stage backend), `docs`, `spikes`. Add `vault`, `integrations` or `db` packages only when a second consumer exists. One mock mechanism only (in-app fixtures), no TypeSpec, Prism or MSW stack. Phase 4 adds `apps/desktop` for the Electron shell.
 
 ## 17. Open architectural questions
 
@@ -299,3 +299,12 @@ Now: `apps/web`, `packages/shared`, `docs`, `spikes`. Phase 1 adds `apps/daemon`
 5. Which persona-injection mode wins after the TTFT spike (preset plus append, or replacement)?
 6. Who is the single writer to the vault when Obsidian is open (proposed: hash and mtime checks, `str_replace`-style edits, append-only journals, a self-write guard in the watcher)?
 7. How do session summaries become vault notes (the `session_summary` bridge is described in research but not specified)?
+
+## 18. Stage backend and embedded terminal (built 2026-11-01)
+
+Two parts were added after the first design of this document. Both are built and were reviewed adversarially ([review record](reviews/2026-11-01-terminal-and-stage.md)); neither has run on Windows or against a real engine.
+
+- **Stage backend** (`packages/stage-core`, wired into the daemon in `apps/daemon/src/stage`). The daemon owns the live 3D assistant: characters, wardrobe, scene, mood, behaviour, speech and her character memory. An engine is a replaceable "stage": it connects to `/ws/stage` with its own bearer token and speaks `mira-stage/1` (`packages/shared/src/stage.ts`), JSON commands and events plus binary audio and ARKit-52 face frames on one clock. A headless `SimulatorStage` and a reusable conformance suite (`runStageConformance`) stand in until an engine exists. Decisions: [ADR 0008](adr/0008-stage-protocol-and-engine-choice.md). Concept: [CEREBRAL-SPACE.md](CEREBRAL-SPACE.md). Details: `packages/stage-core/README.md` and the Stage section of `apps/daemon/README.md`.
+- **Embedded terminal** (`apps/daemon/src/terminal`). node-pty (ConPTY on Windows) runs in one host process per terminal, off until enabled in Settings, reachable only through single-use terminal-bound tickets plus a pairing proof, and never by any Claude lane or tool. It runs the user's own `claude` (the documented end-user subscription case) or a shell. The Terminal section of `apps/daemon/README.md` holds the threat model and its stated residuals.
+- Both share the daemon's request gate (Host, Origin, cookie), redaction, audit log and loopback-only binding. They add two further secrets (the stage token, and the terminal tickets with the pairing) that no other route accepts.
+- What she remembers is stored in the ops database and can be inspected and forgotten at any time, with the stage switched off too (see [PRIVACY.md](PRIVACY.md) sections 3 and 10).

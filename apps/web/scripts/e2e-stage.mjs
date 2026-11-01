@@ -104,6 +104,30 @@ function freePort() {
 const maskCode = (s) => s.replace(/code=[\w-]+/g, 'code=***')
 const daemons = new Set()
 
+/**
+ * Write memory rows into the daemon's SQLite file while the daemon is STOPPED (the schema is the daemon's own migration 3).
+ * The fake Claude never calls her memory tool, so this is how the UI gets something to show; it also proves that what is
+ * stored survives a restart and is read back by the real daemon.
+ */
+function seedMemory(dataDir, rows) {
+  const Database = daemonRequire('better-sqlite3')
+  const db = new Database(path.join(dataDir, 'app.db'))
+  try {
+    const ins = db.prepare(
+      'INSERT INTO stage_memory (id, kind, text, importance, emotion, sensitivity, tags_json, created_at, updated_at, recall_count, last_recalled_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, NULL)',
+    )
+    for (const r of rows) ins.run(r.id, r.kind, r.text, r.importance, r.sensitivity, '[]', r.at, r.at)
+  } finally {
+    db.close()
+  }
+}
+const DAY_MS = 86_400_000
+const MEMORY_ROWS = [
+  { id: 'mem.e2e-1', kind: 'preference', text: 'Likes the camera wide while she works', importance: 3, sensitivity: 'normal', at: Date.now() - 3 * DAY_MS },
+  { id: 'mem.e2e-2', kind: 'relationship', text: 'Teases about the late-night commits', importance: 4, sensitivity: 'private', at: Date.now() - 2 * DAY_MS },
+  { id: 'mem.e2e-3', kind: 'episode', text: 'A hard evening after a difficult conversation', importance: 5, sensitivity: 'sensitive', at: Date.now() - 3_600_000 },
+]
+
 async function startDaemon({ port, dataDir, webDist }) {
   const env = { ...process.env, DAEMON_PORT: String(port), DATA_DIR: dataDir, CLAUDE_BACKEND: 'fake', LOG_LEVEL: 'warn', WEB_DIST: webDist }
   delete env.ANTHROPIC_API_KEY
@@ -519,6 +543,7 @@ try {
     const firstSim = sim
     await stopDaemon(d1)
     await until('the simulator saw the daemon go', async () => !client.connected(), { timeout: 15_000 })
+    seedMemory(dataDir, MEMORY_ROWS) // what she "remembered" before the restart (the daemon is down, so the file is free)
     d2 = await startDaemon({ port, dataDir, webDist })
     sim2 = await until('a NEW simulator connected', async () => (client.history.length >= 2 && client.connected() ? client.sim : undefined), { timeout: 40_000 })
     if (sim2 === firstSim) throw new Error('the same simulator?')
@@ -542,6 +567,43 @@ try {
   })
   await shot('after restart')
 
+  // ---------------------------------------------------------------- 8b. what she remembers
+  log('\n-- what she remembers (three rows were written to SQLite while the daemon was down)')
+  const memoryIds = () => page.locator('[data-testid="stage-memory"] [data-memory]').evaluateAll((els) => els.map((e) => e.getAttribute('data-memory')))
+  const getJson = (url) => page.evaluate(async (u) => (await fetch(u, { credentials: 'same-origin', cache: 'no-store' })).json(), url)
+  await check('Settings > Stage shows, by itself after the restart, what she remembered: newest first, with kind and privacy label', async () => {
+    await until('three remembered items', async () => (await memoryIds()).length === 3, { timeout: 20_000 })
+    const ids = await memoryIds()
+    if (ids.join() !== 'mem.e2e-3,mem.e2e-2,mem.e2e-1') throw new Error(`order ${ids.join()}`)
+    const count = await page.locator('[data-testid="stage-memory-count"]').innerText()
+    if (!/3 remembered: 1 normal, 1 private, 1 sensitive/.test(count)) throw new Error(count)
+    const hard = await page.locator('[data-memory="mem.e2e-3"]').innerText()
+    if (!/Moment/.test(hard) || !/sensitive/.test(hard) || !/importance 5\/5/.test(hard)) throw new Error(hard)
+    const tease = await page.locator('[data-memory="mem.e2e-2"]').innerText()
+    if (!/Between us/.test(tease) || !/private/.test(tease)) throw new Error(tease)
+    const cam = await page.locator('[data-memory="mem.e2e-1"]').innerText()
+    if (!/Preference/.test(cam) || /private|sensitive/.test(cam)) throw new Error(cam)
+  })
+  await check('private and sensitive text is marked for Guest mode; normal text is not', async () => {
+    for (const [id, expected] of [['mem.e2e-1', 0], ['mem.e2e-2', 1], ['mem.e2e-3', 1]]) {
+      const n = await page.locator(`[data-memory="${id}"] [data-sensitive]`).count()
+      if (n !== expected) throw new Error(`${id}: ${n} marks, expected ${expected}`)
+    }
+  })
+  await check('Keep cancels; Forget asks twice, then the item is gone from the page and the daemon, and its text is nowhere on the page', async () => {
+    const item = page.locator('[data-memory="mem.e2e-2"]')
+    await item.locator('[data-action="forget"]').click()
+    await item.locator('button', { hasText: 'Keep' }).click()
+    if ((await memoryIds()).length !== 3) throw new Error('Keep removed something')
+    await item.locator('[data-action="forget"]').click()
+    await item.locator('[data-action="forget-confirm"]').click()
+    await until('two items left', async () => (await memoryIds()).join() === 'mem.e2e-3,mem.e2e-1')
+    const api = await getJson('/api/stage/memory')
+    if (api.total !== 2 || api.items.some((m) => m.id === 'mem.e2e-2')) throw new Error(JSON.stringify(api).slice(0, 200))
+    if ((await page.locator('main').innerText()).includes('late-night commits')) throw new Error('the forgotten text is still on the page')
+  })
+  await shot('what she remembers')
+
   // ---------------------------------------------------------------- 9. disconnect and the switch
   log('\n-- disconnect and the switch')
   await check('Disconnect closes the stage connection; the simulator may reconnect', async () => {
@@ -549,13 +611,66 @@ try {
     await until('the simulator saw the close', async () => !client.connected(), { timeout: 10_000 })
     await until('and it reconnected by itself', async () => client.connected() && client.history.length >= 3, { timeout: 20_000 })
   })
-  await check('switching the stage backend off disconnects the stage and the tab says so; on again restores it', async () => {
+  await check('switching the stage backend off disconnects the stage and the tab says so; her memory stays visible and forgettable meanwhile; on again restores it', async () => {
     expectRefusals++
     await page.getByRole('switch', { name: 'Stage backend' }).click()
     await until('the tab says the stage is off', async () => /The stage is off/.test(await page.locator('main').innerText()))
     await until('the stage was disconnected', async () => !client.connected(), { timeout: 10_000 })
     await sleep(1500)
     if (client.connected()) throw new Error('a stage connected while the stage is off')
+    // "Her data stays" is only true if you can still see and delete it while the stage is off.
+    const whileOff = (await memoryIds()).join()
+    if (whileOff !== 'mem.e2e-3,mem.e2e-1') throw new Error(`memory while the stage is off: ${whileOff}`)
+    const off = page.locator('[data-memory="mem.e2e-1"]')
+    await off.locator('[data-action="forget"]').click()
+    await off.locator('[data-action="forget-confirm"]').click()
+    await until('one item left, with the stage off', async () => (await memoryIds()).join() === 'mem.e2e-3')
+    await page.getByRole('switch', { name: 'Stage backend' }).click()
+    await until('the tab is back', async () => (await page.locator('[data-character]').count()) === 2, { timeout: 15_000 })
+    await until('the stage reconnects', async () => client.connected(), { timeout: 20_000 })
+  })
+
+  await check('Forget everything asks first, then empties the list; the daemon agrees and the audit trail names the deletions, never the text', async () => {
+    await page.locator('[data-action="forget-all"]').click()
+    await page.locator('button', { hasText: 'Keep them' }).click()
+    if ((await memoryIds()).join() !== 'mem.e2e-3') throw new Error('Keep them forgot something')
+    await page.locator('[data-action="forget-all"]').click()
+    await page.locator('[data-action="forget-all-confirm"]').click()
+    await page.locator('[data-testid="stage-memory-empty"]').waitFor({ timeout: 10_000 })
+    const api = await getJson('/api/stage/memory')
+    if (api.total !== 0 || api.items.length !== 0) throw new Error(JSON.stringify(api).slice(0, 200))
+    const snapshot = await getJson('/api/snapshot')
+    const audit = JSON.stringify(snapshot.settings?.audit ?? [])
+    if (!/Forgot something she remembered/.test(audit) || !/Forgot everything she remembered/.test(audit)) throw new Error('the deletions were not audited')
+    if (/late-night|hard evening|Likes the camera wide/.test(audit)) throw new Error('the audit trail holds what she remembered')
+  })
+
+  await check('with the stage switched off, a finished chat reply still makes the panel fetch her memory again by itself', async () => {
+    // She writes memory with a tool call in the middle of a reply, and that does not change the stage revision, so the panel
+    // refetches when a reply finishes. The panel also refetches when the revision changes, and with the stage on a reply can move
+    // the camera. Switched off nothing structural can happen, so only the finished reply can be the cause (checked: the revision
+    // must not move).
+    expectRefusals++
+    await page.getByRole('switch', { name: 'Stage backend' }).click()
+    await until('the tab says the stage is off', async () => /The stage is off/.test(await page.locator('main').innerText()))
+    let fetches = 0
+    const count = (req) => {
+      if (req.method() === 'GET' && new URL(req.url()).pathname === '/api/stage/memory') fetches++
+    }
+    page.on('request', count)
+    try {
+      await sleep(1500) // let the switch's own refetches settle
+      const quiet = fetches
+      const revBefore = (await getJson('/api/stage')).rev
+      const composer = page.locator('aside[aria-label="Mira\'s room and chat"] textarea').first()
+      await composer.fill('Thanks, that is all for now.')
+      await composer.press('Enter')
+      await until('the panel fetched again after the reply', async () => fetches > quiet, { timeout: 30_000 })
+      const revAfter = (await getJson('/api/stage')).rev
+      if (revAfter !== revBefore) throw new Error(`the stage revision moved (${revBefore} to ${revAfter}) with the stage off, so the fetch cannot be credited to the finished reply`)
+    } finally {
+      page.off('request', count)
+    }
     await page.getByRole('switch', { name: 'Stage backend' }).click()
     await until('the tab is back', async () => (await page.locator('[data-character]').count()) === 2, { timeout: 15_000 })
     await until('the stage reconnects', async () => client.connected(), { timeout: 20_000 })

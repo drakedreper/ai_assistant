@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { IsoDateTime } from './schemas/common'
 import { Persona } from './schemas/settings'
 import { TaskColumn } from './schemas/work'
 import { Affect, GazeTarget, Posture, PresenceStyle, StageEngine, WardrobeSlot } from './stage'
@@ -70,6 +71,13 @@ export const DaemonRoutes = {
   stageSceneObject: (id: string) => `/api/stage/scene/objects/${encodeURIComponent(id)}`,
   /** PUT {shot}: the active camera shot. */
   stageCamera: '/api/stage/scene/camera',
+  /**
+   * GET: what she remembers (StageMemoryList, newest first). DELETE ?confirm=all: forget everything she remembers.
+   * Both work while the stage is switched off: "her data stays" is only true if you can always see and delete it.
+   */
+  stageMemory: '/api/stage/memory',
+  /** DELETE: forget one remembered item. */
+  stageMemoryItem: (id: string) => `/api/stage/memory/${encodeURIComponent(id)}`,
   /** WebSocket. Query: ?since=<seq>&epoch=<epoch> to resume. */
   ws: '/ws',
   /** Claude Code http hooks POST here. Bearer = hook token. Always answers 200 fast (fail-open). */
@@ -340,3 +348,32 @@ export const StageOutfitSuggestion = z.object({
   changed: z.boolean(),
 })
 export type StageOutfitSuggestion = z.infer<typeof StageOutfitSuggestion>
+
+/** The most items GET /api/stage/memory returns (the newest). `total` still counts everything stored. */
+export const STAGE_MEMORY_LIST_LIMIT = 500
+
+/**
+ * One thing she wrote down with her memory tool. The text is your own data on your own PC, so you see all of it; the UI
+ * blurs everything that is not `normal` in Guest mode. Only `normal` items can ever be summarised into her prompt.
+ */
+export const StageMemoryItem = z.object({
+  id: z.string().min(1).max(96),
+  kind: z.enum(['episode', 'relationship', 'preference']),
+  text: z.string().max(520),
+  importance: z.number().int().min(1).max(5),
+  sensitivity: z.enum(['normal', 'private', 'sensitive']),
+  tags: z.array(z.string().max(40)).max(8),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+})
+export type StageMemoryItem = z.infer<typeof StageMemoryItem>
+
+export const StageMemoryList = z.object({
+  /** Everything stored, not only the items returned. */
+  total: z.number().int().nonnegative(),
+  /** Newest first, at most STAGE_MEMORY_LIST_LIMIT. */
+  items: z.array(StageMemoryItem).max(STAGE_MEMORY_LIST_LIMIT),
+  /** Counts over everything stored. */
+  bySensitivity: z.object({ normal: z.number().int().nonnegative(), private: z.number().int().nonnegative(), sensitive: z.number().int().nonnegative() }),
+})
+export type StageMemoryList = z.infer<typeof StageMemoryList>
