@@ -1,9 +1,11 @@
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createBudgetGuard, createFakeBackend, createMockToolBindings, createSdkBackend, createSecretaryLane } from '@ai-assistant/agent-core'
 import { createDaemon } from './app'
 import { formatBanner } from './banner'
 import { ConfigError, describeConfig, loadConfig } from './config'
 import { createLogger } from './log'
+import { looksLikeContainer } from './net/peer'
 import { ensurePrivateDir } from './security'
 import { openBrowser } from './openBrowser'
 
@@ -61,6 +63,8 @@ async function main(): Promise<void> {
     apiKeyPresent: Boolean(config.apiKey),
     demo: config.demo,
     webBuilt: Boolean(config.webDist),
+    containerMode: config.containerMode,
+    containerDetected: looksLikeContainer(existsSync),
   })) {
     process.stdout.write(`${line}\n`)
   }
@@ -71,7 +75,9 @@ async function main(): Promise<void> {
       daemon.stage.hub.enabled()
         ? `  Stage       ws://127.0.0.1:${info.port}/ws/stage  (for an engine or the simulator)`
         : '  Stage       off (Settings, Stage)',
-      `              the stage token is in ${join(config.dataDir, 'secrets.json')} ("stageToken"), or run: pnpm --filter @ai-assistant/daemon exec tsx src/stage/cli.ts token`,
+      config.containerMode
+        ? '              the stage token is in the data volume ("stageToken" in secrets.json); to print it, run: docker compose exec daemon node --import tsx src/stage/cli.ts token'
+        : `              the stage token is in ${join(config.dataDir, 'secrets.json')} ("stageToken"), or run: pnpm --filter @ai-assistant/daemon exec tsx src/stage/cli.ts token`,
       '',
     ].join('\n')}\n`,
   )

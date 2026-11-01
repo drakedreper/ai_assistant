@@ -2,3 +2,8 @@
 *.cmd text eol=crlf
 *.bat text eol=crlf
 *.sh text eol=lf
+# A CRLF Dockerfile or compose file breaks the shell lines inside it.
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+docker-compose.yml text eol=lf
+*.ps1 text eol=crlf

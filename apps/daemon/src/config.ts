@@ -80,8 +80,15 @@ export interface StageConfig {
 }
 
 export interface DaemonConfig {
-  /** Always loopback. There is deliberately no way to configure this. */
-  readonly host: '127.0.0.1'
+  /**
+   * Loopback. There is deliberately no setting for this EXCEPT container mode (MIRA_CONTAINER=1, which the Docker image sets):
+   * inside a container a published port only reaches a process that listens on the container's own interface, so the host is
+   * then 0.0.0.0 (all interfaces of the container). docker-compose.yml publishes the port on the host's 127.0.0.1 only.
+   * ADR 0009 explains what that changes and what it does not.
+   */
+  readonly host: '127.0.0.1' | '0.0.0.0'
+  /** MIRA_CONTAINER=1: the daemon runs inside the Docker image (see `host`, and `peerAllowed` in net/peer.ts). */
+  readonly containerMode: boolean
   /** 0 is accepted by createDaemon for tests (ephemeral port); the environment can only set 1..65535. */
   port: number
   dataDir: string
@@ -227,6 +234,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, ctx: Partial<Co
 
   const dataDir = resolveDataDir(env, c.platform, c.homedir)
   const demo = parseBool(env.DEMO)
+  // The ONLY way to listen on anything but loopback: a deliberate, named switch that the Docker image sets and nothing else does
+  // (DAEMON_HOST, DAEMON_BIND and the like are not read at all).
+  const containerMode = parseBool(env.MIRA_CONTAINER)
 
   const webCandidate = env.WEB_DIST?.trim() ? p.resolve(env.WEB_DIST.trim()) : nodePath.resolve(c.moduleDir, '..', '..', 'web', 'dist')
   const webDist = c.exists(nodePath.join(webCandidate, 'index.html')) ? webCandidate : undefined
@@ -236,7 +246,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, ctx: Partial<Co
   const claudeCommandOverride = env.TERMINAL_CLAUDE_COMMAND?.trim() || undefined
 
   const config: DaemonConfig = {
-    host: '127.0.0.1',
+    host: containerMode ? '0.0.0.0' : '127.0.0.1',
+    containerMode,
     port,
     dataDir,
     // The demo runs on its own disposable database so fixture rows never mix with real data.
@@ -304,6 +315,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, ctx: Partial<Co
 export function describeConfig(config: DaemonConfig): Record<string, string | number | boolean> {
   return {
     host: config.host,
+    containerMode: config.containerMode,
     port: config.port,
     dataDir: config.dataDir,
     backend: config.backend,

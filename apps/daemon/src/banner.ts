@@ -9,6 +9,10 @@ export interface BannerInfo {
   apiKeyPresent: boolean
   demo: boolean
   webBuilt: boolean
+  /** Additive: the daemon runs in the Docker image (MIRA_CONTAINER=1). */
+  containerMode?: boolean
+  /** Additive: this really looks like a container (/.dockerenv or /run/.containerenv). Only used to warn. */
+  containerDetected?: boolean
 }
 
 /**
@@ -16,7 +20,15 @@ export interface BannerInfo {
  */
 export function formatBanner(i: BannerInfo): string[] {
   const lines: string[] = []
-  lines.push('', `Mira daemon ${i.version}`, `  Listening   http://127.0.0.1:${i.port}  (loopback only)`)
+  if (i.containerMode) {
+    lines.push('', `Mira daemon ${i.version}`, `  Listening   http://127.0.0.1:${i.port}  (container mode: the daemon listens on every interface INSIDE the container)`)
+    lines.push('              Publish the port on 127.0.0.1 only (docker-compose.yml does: "127.0.0.1:PORT:PORT"). Never -p PORT:PORT.')
+    if (i.containerDetected === false) {
+      lines.push('              WARNING: MIRA_CONTAINER=1 but this does not look like a container: the daemon is reachable from your network.')
+    }
+  } else {
+    lines.push('', `Mira daemon ${i.version}`, `  Listening   http://127.0.0.1:${i.port}  (loopback only)`)
+  }
   lines.push(`  Sign in     ${i.exchangeUrl}`, `              open this once; it works for ${i.exchangeTtlMinutes} minutes and only one time`)
   lines.push(`  Data dir    ${i.dataDir}`)
   if (i.backend === 'fake') {

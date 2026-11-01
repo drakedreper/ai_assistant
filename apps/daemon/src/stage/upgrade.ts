@@ -5,6 +5,7 @@ import { DaemonRoutes } from '@ai-assistant/shared'
 import type { StageConfig } from '../config'
 import type { Logger } from '../log'
 import type { Security } from '../security'
+import { peerAllowed } from '../net/peer'
 import type { StageHub } from './hub'
 import { wsTransport } from './transport'
 
@@ -13,7 +14,9 @@ import { wsTransport } from './transport'
  * simulator), not of the browser, and it is guarded accordingly. Checks, in this order, all before the upgrade completes
  * (a plain HTTP answer, no socket is created):
  *
- *   1. the peer address is loopback (the daemon only listens on 127.0.0.1; this is the explicit second lock);
+ *   1. the peer address is loopback (the daemon only listens on 127.0.0.1; this is the explicit second lock). In container
+ *      mode (the Docker image) a PRIVATE peer address is accepted as well, because Docker hands published-port traffic to
+ *      the container from its bridge gateway; a public address is refused in both modes (see net/peer.ts, ADR 0009);
  *   2. the path is exactly /ws/stage and the request target carries NO query string at all (a token in a URL would
  *      reach logs and history: it is refused outright, never read);
  *   2b. the request is HTTP/1.1 (RFC 6455 asks for at least that) and carries each of Host, Origin and Authorization at
@@ -48,6 +51,8 @@ export interface StageUpgradeDeps {
   hub: StageHub
   config: StageConfig
   log: Logger
+  /** True in container mode (MIRA_CONTAINER=1): private peer addresses are accepted besides loopback. Default false. */
+  containerMode?: boolean
 }
 
 function reject(socket: Duplex, status: number, code: string): void {
@@ -57,7 +62,6 @@ function reject(socket: Duplex, status: number, code: string): void {
   socket.destroy()
 }
 
-const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
 /** Headers the upgrade decision reads; sent twice, the request is ambiguous and is refused. */
 const SINGLE_HEADERS = new Set(['host', 'origin', 'authorization'])
 
@@ -75,6 +79,7 @@ export function duplicatedDecisionHeader(rawHeaders: readonly string[]): string 
 
 export function createStageUpgrade(deps: StageUpgradeDeps): StageUpgrade {
   const { security, hub, config, log } = deps
+  const containerMode = deps.containerMode === true
   const wss = new WebSocketServer({ noServer: true, maxPayload: config.maxMessageBytes, perMessageDeflate: false })
   const stats = { accepted: 0, rejected: 0, droppedSlow: 0, droppedStale: 0 }
   const alive = new WeakMap<object, boolean>()
@@ -97,7 +102,7 @@ export function createStageUpgrade(deps: StageUpgradeDeps): StageUpgrade {
       reject(socket, status, code)
     }
     if (url.pathname !== STAGE_WS_PATH) return no(404, 'not_found')
-    if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) return no(403, 'not_loopback')
+    if (!peerAllowed(req.socket.remoteAddress, containerMode)) return no(403, containerMode ? 'peer_not_allowed' : 'not_loopback')
     // Not even an empty one: `?` anywhere in the request target is refused, so nothing can ever be read from it.
     if ((req.url ?? '').includes('?')) return no(400, 'no_query', 'a query string was sent')
     if (req.httpVersion !== '1.1') return no(400, 'http_version', 'the upgrade was not HTTP/1.1')

@@ -1,0 +1,74 @@
+# Builds Mira's backend image and runs it for real, on a Linux machine with Docker, then checks it from the host's side
+# the way a browser and a Unity stage would reach it (scripts/docker-smoke.ts). The development sandbox this project is
+# written in has no Docker daemon, so THIS is where the image is verified. Pushes to the working branch only, or by hand.
+name: docker
+
+on:
+  push:
+    branches: [claude/determined-pasteur-klc0fw]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker-compose.yml'
+      - 'apps/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - 'scripts/docker-smoke.ts'
+      - '.github/workflows/docker.yml'
+  workflow_dispatch:
+
+# One group per commit, so re-running an old run cannot cancel a newer commit's run.
+concurrency:
+  group: docker-${{ github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: the image builds and runs (Linux, Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+
+      # The smoke script needs only ws and the simulator stage, so no native build is needed on the host.
+      - name: Install the repository's JavaScript
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build the image
+        run: docker compose build
+
+      - name: Start it
+        run: docker compose up -d
+
+      - name: The host's listening socket is on 127.0.0.1 only
+        run: |
+          sleep 3
+          ss -ltnH 'sport = :7421'
+          ss -ltnH 'sport = :7421' | grep -q '127.0.0.1:7421'
+          if ss -ltnH 'sport = :7421' | grep -E '0\.0\.0\.0:7421|\*:7421|\[::\]:7421'; then echo 'published on every interface'; exit 1; fi
+
+      - name: Smoke test, from the host
+        run: pnpm --filter @ai-assistant/daemon exec tsx ../../scripts/docker-smoke.ts
+
+      - name: Container logs (on failure)
+        if: failure()
+        run: docker compose logs --no-color --tail 200 daemon
+
+      - name: Image size
+        if: always()
+        run: docker image ls mira-daemon
+
+      - name: Stop
+        if: always()
+        run: docker compose down -v

@@ -19,6 +19,8 @@ export type StageOverrides = Pick<StageHubDeps, 'tts' | 'face' | 'timers' | 'rng
 export interface StageFeatureDeps extends Omit<StageHubDeps, keyof StageOverrides> {
   security: Security
   overrides?: StageOverrides
+  /** Container mode (MIRA_CONTAINER=1): the stage socket also accepts private peer addresses (see net/peer.ts). */
+  containerMode?: boolean
 }
 
 export interface StageFeature {
@@ -36,9 +38,9 @@ export interface StageFeature {
 }
 
 export function createStageFeature(d: StageFeatureDeps): StageFeature {
-  const { security, overrides, ...hubDeps } = d
+  const { security, overrides, containerMode, ...hubDeps } = d
   const hub = new StageHub({ ...hubDeps, ...(overrides ?? {}) })
-  const upgrade = createStageUpgrade({ security, hub, config: d.config.stage, log: d.log })
+  const upgrade = createStageUpgrade({ security, hub, config: d.config.stage, log: d.log, containerMode: containerMode === true })
   let actions: StageActions | undefined
   return {
     hub,

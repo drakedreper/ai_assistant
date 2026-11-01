@@ -42,7 +42,8 @@ All read once at startup by `src/config.ts` (a pure function of the environment,
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DAEMON_PORT` | `7421` | Port on `127.0.0.1`. There is deliberately no way to bind another interface. Fails fast if taken. |
+| `DAEMON_PORT` | `7421` | Port on `127.0.0.1`. There is deliberately no setting for the interface (`DAEMON_HOST` and the like are not read); the one exception is `MIRA_CONTAINER` below. Fails fast if taken. |
+| `MIRA_CONTAINER` | unset | `1` is container mode: the daemon listens on every interface **of the container** and the stage socket also accepts private peer addresses, because Docker delivers published-port traffic from its bridge gateway. **Set by the Docker image and by nothing else; do not set it on a PC** (the banner warns when nothing says this is a container). The compose file publishes the port on `127.0.0.1` only. [ADR 0009](../../docs/adr/0009-container-mode.md), [docs/DOCKER.md](../../docs/DOCKER.md). |
 | `DATA_DIR` | Windows `%APPDATA%\ai-assistant`; otherwise `$XDG_DATA_HOME` or `~/.local/share` + `/ai-assistant` | Database, secrets, agent scratch folder. |
 | `CLAUDE_BACKEND` | `fake` | `fake` (scripted, zero tokens) or `sdk` (real Agent SDK). |
 | `CLAUDE_AUTH_MODE` | `api-key` | `api-key` or `local-login` ([ADR 0001](../../docs/adr/0001-claude-auth-modes.md)). Changeable in Settings; takes effect for the next lane session (restart). |

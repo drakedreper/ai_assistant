@@ -1,0 +1,39 @@
+# Mira's backend in Docker. Start it with start-docker.cmd (Windows) or scripts/start-docker.sh, or by hand:
+#
+#   docker compose up -d --build
+#   docker compose logs daemon            # the one-time sign-in link is printed here
+#
+# More in docs/DOCKER.md.
+name: mira
+
+services:
+  daemon:
+    build:
+      context: .
+    image: mira-daemon:local
+    init: true
+    restart: unless-stopped
+    # THIS LINE KEEPS THE DAEMON PRIVATE. Inside the container the daemon listens on every interface (container mode,
+    # ADR 0009), so only the way the port is published decides who can reach it: on this PC's 127.0.0.1 and nowhere else.
+    # Never write "7421:7421" here, which would publish it on every network interface of this PC.
+    # The two port numbers must stay equal: the daemon only answers a Host of 127.0.0.1:PORT or localhost:PORT.
+    ports:
+      - "127.0.0.1:${DAEMON_PORT:-7421}:${DAEMON_PORT:-7421}"
+    environment:
+      DAEMON_PORT: ${DAEMON_PORT:-7421}
+      # fake = scripted replies, zero tokens, no network. sdk = the real Claude (needs ANTHROPIC_API_KEY below).
+      CLAUDE_BACKEND: ${CLAUDE_BACKEND:-fake}
+      CLAUDE_AUTH_MODE: ${CLAUDE_AUTH_MODE:-api-key}
+      # Passed through from the shell that runs "docker compose"; it is never written to a file (an empty value means unset).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # The database, secrets.json (hook and stage tokens) and the shell home live here and survive "docker compose down".
+      - mira-data:/data
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  mira-data:

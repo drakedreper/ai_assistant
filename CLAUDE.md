@@ -27,11 +27,12 @@ Built and verified in a Linux sandbox: the mockup (an accepted draft), daemon, w
 - Run the app: `start.cmd` (Windows) or `scripts/start.sh` (install, build, start, open the browser). By hand it is install, `pnpm --filter @ai-assistant/web build` (the daemon serves the built UI; without it it says "Web UI not built"), then the daemon start below.
 - One suite: `pnpm --filter @ai-assistant/daemon exec vitest run test/<file>` (same for `agent-core`, `stage-core`, `shared`).
 - E2E: `node apps/web/scripts/e2e-stage.mjs` (also `e2e-daemon`, `e2e-terminal`, `smoke`). Run them one at a time.
+- Docker: `start-docker.cmd` or `scripts/start-docker.sh` (builds, starts, prints the sign-in link); `docker compose up -d --build`; `docker compose exec daemon node --import tsx src/stage/cli.ts token` prints the stage token. There is no Docker daemon in this sandbox: the image is verified only by `.github/workflows/docker.yml` (builds it, runs it, `scripts/docker-smoke.ts`). Details: `docs/DOCKER.md`.
 - Run the daemon: `pnpm --filter @ai-assistant/daemon start` (prints a sign-in link). Env: `CLAUDE_BACKEND=fake|sdk`, `CLAUDE_AUTH_MODE`, `CLAUDE_CONVERSATION=fresh-daily|resume`, `DATA_DIR`, `DAEMON_PORT` (7421).
 
 ## Invariants (do not break)
 
-- Loopback only; Host, Origin and cookie on every route; separate hook and stage tokens; terminals need tickets and a pairing proof and are never reachable by any Claude lane or tool.
+- Loopback only (the one exception is container mode, `MIRA_CONTAINER=1`, set by the Dockerfile alone: the daemon listens on the container's interface and `docker-compose.yml` publishes the port on `127.0.0.1` only; ADR 0009); Host, Origin and cookie on every route; separate hook and stage tokens; terminals need tickets and a pairing proof and are never reachable by any Claude lane or tool.
 - No secrets, tokens, keystrokes or terminal output in logs or the database. No API key in a file. The daemon never reads or proxies Claude OAuth tokens.
 - Finance is read-only; money movement is permanently locked. All characters are adults; the wardrobe keeps a clothed baseline; the seed catalog is metadata only (no binary assets committed).
 - Shared contracts change additively (optional fields). The web client and the daemon both import them.

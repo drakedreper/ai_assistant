@@ -216,6 +216,7 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
     clock,
     newId,
     persona: () => snapshots.persona(),
+    containerMode: config.containerMode,
     // Forgetting something she remembered also ends the old Claude conversation (it holds what she wrote down).
     onMemoryForgotten: () => void lane?.startFresh().catch(() => undefined),
     ...(opts.stage ? { overrides: opts.stage } : {}),

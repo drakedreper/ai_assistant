@@ -27,6 +27,10 @@ pnpm --filter @ai-assistant/daemon start
 
 The daemon prints a one-time sign-in link (`http://127.0.0.1:7421/?code=...`); open it. Chat, Work and approvals are then live; Today, Brain, Life, Money and World still show sample data and say so. `pnpm --filter @ai-assistant/daemon hooks print` shows the Claude Code hook configuration (it changes nothing). See [apps/daemon/README.md](apps/daemon/README.md).
 
+### Or run the backend in Docker
+
+With Docker Desktop running, double-click `start-docker.cmd` (macOS, Linux, Git Bash: `scripts/start-docker.sh`). It builds the image, starts the daemon and the built web app in a container, and opens the sign-in link. Unity and the browser stay on your PC and use the published port, which is bound to `127.0.0.1` only. What differs from the native run (terminals, Claude login) is in [docs/DOCKER.md](docs/DOCKER.md).
+
 ## Scripts
 
 | Command | What it does |
@@ -36,6 +40,8 @@ The daemon prints a one-time sign-in link (`http://127.0.0.1:7421/?code=...`); o
 | `pnpm test` | Vitest in `packages/shared` (contracts), `packages/agent-core` (lane, backends, parser), `packages/stage-core` (stage backend and conformance suite) and `apps/daemon` (security, hooks, store, WebSocket, terminal, stage) |
 | `scripts/verify.sh` | Everything in one command: typecheck, unit tests, build, mockup smoke test, the three end-to-end scripts and an orphan-process check, printed as a short table (`scripts/verify.sh quick` skips the browser parts) |
 | `start.cmd` / `scripts/start.sh` | Run the app from a clone in one step: install, build the web app, start the daemon (fake Claude), open the sign-in link in your browser (`OPEN_BROWSER=0` skips that) |
+| `start-docker.cmd` / `scripts/start-docker.sh` | The same backend in a Docker container (`docker-compose.yml`, published on 127.0.0.1 only), with the sign-in link opened for you. [docs/DOCKER.md](docs/DOCKER.md) |
+| `pnpm --filter @ai-assistant/daemon exec tsx ../../scripts/docker-smoke.ts` | Checks a running compose stack from the host: port on 127.0.0.1 only, sign-in, a stage connecting over the published port, the token and data surviving a restart |
 | `pnpm --filter @ai-assistant/web e2e` | End-to-end: a real daemon process and a real browser (sign-in, live hooks, chat, approvals, reconnect, restart) |
 | `node apps/web/scripts/e2e-terminal.mjs` | End-to-end for the embedded terminal (gate, real PTY, reattach, tickets, cross-origin refusals, process cleanup) |
 | `node apps/web/scripts/e2e-stage.mjs` | End-to-end for the stage backend with the simulator stage over the stage socket (outfit, speech frames, camera, refusals, restart resume, inspecting and forgetting what she remembers) |
