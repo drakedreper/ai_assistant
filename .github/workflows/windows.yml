@@ -1,0 +1,204 @@
+# Runs this project's Windows path on a real Windows machine. The project was built in a Linux sandbox, so none of it had
+# ever run on Windows. The first job does what a double-click on start.cmd does (install, check, build, start the daemon,
+# sign in over HTTP); the other steps are information (they never turn the run red) and are read by whoever is
+# checking the Windows state. Pushes to the working branch only, or by hand from the Actions tab.
+name: windows
+
+on:
+  push:
+    branches: [claude/determined-pasteur-klc0fw]
+    paths:
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'start.cmd'
+      - 'scripts/**'
+      - 'apps/**'
+      - 'packages/**'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  start-cmd:
+    name: start.cmd on Windows, Node 22.14.0
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+
+      - name: The machine
+        run: |
+          node -v
+          npm -v
+          git --version
+          "core.autocrlf = $(git config core.autocrlf)"
+          (Get-CimInstance Win32_OperatingSystem).Caption
+          "pnpm on PATH before start.cmd: $([bool](Get-Command pnpm -ErrorAction SilentlyContinue))"
+          "node-gyp on PATH: $([bool](Get-Command node-gyp -ErrorAction SilentlyContinue))"
+          exit 0
+
+      # The real launcher, run as a double-click runs it (no pnpm installed beforehand, so its own pnpm step is exercised).
+      - name: start.cmd, then sign in over HTTP
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'start.log'
+          $proc = Start-Process -FilePath 'cmd.exe' -ArgumentList '/d', '/c', 'start.cmd' -PassThru -NoNewWindow `
+            -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+          $link = $null
+          $deadline = (Get-Date).AddMinutes(25)
+          while (-not $link -and -not $proc.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            try { $text = if (Test-Path $log) { Get-Content $log -Raw } else { '' } } catch { $text = '' }
+            if ($text -match 'Sign in\s+(http://127\.0\.0\.1:\d+/\?code=[\w-]+)') { $link = $Matches[1] }
+          }
+          function Show-Log([string]$title, [string]$path, [int]$tail) {
+            "---- $title"
+            if (Test-Path $path) {
+              Get-Content $path -Tail $tail | ForEach-Object { ($_ -replace 'code=[\w-]+', 'code=***') -replace '#tp=[\w-]+', '#tp=***' }
+            }
+          }
+          if (-not $link) {
+            Write-Host '::error::start.cmd never printed a sign-in link'
+            Show-Log 'start.cmd output (tail)' $log 120
+            Show-Log 'start.cmd errors (tail)' "$log.err" 60
+            if (-not $proc.HasExited) { taskkill /PID $proc.Id /T /F | Out-Null }
+            exit 1
+          }
+          Write-Host "::add-mask::$(($link -split 'code=')[1])"
+          Start-Sleep -Seconds 5
+          "browsers started by OPEN_BROWSER: " + ((Get-Process msedge, chrome, firefox -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name -Unique) -join ', ')
+          $base = ([uri]$link).GetLeftPart('Authority')
+          $code = ($link -split 'code=')[1]
+          $exchange = 'none'; $api = 'none'; $bytes = 0; $page = 'none'; $html = ''
+          try {
+            # what the web app does: POST the one-time code (with the daemon's own Origin), keep the cookie, then call the API
+            $r = Invoke-WebRequest -Uri "$base/api/auth/exchange" -Method Post -ContentType 'application/json' `
+              -Headers @{ Origin = $base } -Body (@{ code = $code } | ConvertTo-Json -Compress) -SessionVariable web -UseBasicParsing
+            $exchange = $r.StatusCode
+            $s = Invoke-WebRequest -Uri "$base/api/snapshot" -WebSession $web -UseBasicParsing
+            $api = $s.StatusCode
+            $bytes = $s.Content.Length
+            $p = Invoke-WebRequest -Uri "$base/" -WebSession $web -UseBasicParsing
+            $page = $p.StatusCode
+            $html = [string]$p.Content
+          } catch {
+            "HTTP check failed: $($_.Exception.Message)"
+          }
+          "sign-in exchange: HTTP $exchange"
+          "/api/snapshot: HTTP $api, $bytes characters"
+          "/: HTTP $page, serves the built web app: $($html -match 'id=.root.')"
+          Show-Log 'start.cmd output (head of the interesting lines)' $log 400 | Select-String -Pattern 'node-gyp|Ignored|WARN|ERR|Database library|Installing|Building|Starting|Done in|built in' | Select-Object -First 25
+          taskkill /PID $proc.Id /T /F | Out-Null
+          Get-NetTCPConnection -LocalPort ([uri]$link).Port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+          Get-Process msedge, chrome, firefox -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          $ok = ($exchange -eq 200) -and ($api -eq 200) -and ($bytes -gt 100) -and ($page -eq 200) -and ($html -match 'id=.root.')
+          if (-not $ok) { Write-Host '::error::the daemon started but the sign-in or the app did not respond as expected'; exit 1 }
+          "start.cmd path OK"
+
+      - name: pnpm for the steps below
+        continue-on-error: true
+        run: |
+          corepack enable
+          pnpm --version
+          exit 0
+
+      - name: Typecheck (information)
+        continue-on-error: true
+        timeout-minutes: 15
+        run: pnpm -r typecheck
+
+      - name: Unit tests per package (information)
+        continue-on-error: true
+        timeout-minutes: 40
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $bad = 0
+          foreach ($p in 'shared', 'agent-core', 'stage-core', 'daemon') {
+            $out = pnpm --filter "@ai-assistant/$p" test 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            "== $p (exit $code)"
+            ($out -split "`r?`n") | Where-Object { $_ -match '^\s*(Test Files|Tests)\s' -or $_ -match '^\s*FAIL\s' } | Select-Object -First 60
+            if ($code -ne 0) { $bad++ }
+          }
+          if ($bad -gt 0) { exit 1 }
+
+      - name: Playwright Chromium (information)
+        continue-on-error: true
+        timeout-minutes: 15
+        run: pnpm --filter '@ai-assistant/web' exec playwright install chromium
+
+      - name: e2e scripts, one at a time (information)
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          $ErrorActionPreference = 'Continue'
+          function Run-Script([string]$name, [string]$script) {
+            $out = node $script 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            $lines = $out -split "`r?`n"
+            $pass = @($lines | Where-Object { $_ -match '^PASS' })
+            $skipped = @($pass | Where-Object { $_ -match 'skipped on Windows' })
+            $fail = @($lines | Where-Object { $_ -match '^FAIL' })
+            Write-Host "== $name (exit $code): $($pass.Count - $skipped.Count) passed, $($skipped.Count) not run on Windows, $($fail.Count) failed"
+            $fail | Select-Object -First 30 | ForEach-Object { Write-Host $_ }
+            if ($fail.Count -eq 0 -and $code -ne 0) { $lines | Select-Object -Last 25 | ForEach-Object { Write-Host $_ } }
+            return $code
+          }
+          # the smoke test needs the built app served by vite preview
+          $preview = Start-Process -FilePath 'cmd.exe' -ArgumentList '/d', '/c', 'pnpm --filter @ai-assistant/web preview' -PassThru -NoNewWindow `
+            -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP 'preview.log') -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'preview.err')
+          for ($i = 0; $i -lt 40; $i++) {
+            try { Invoke-WebRequest -Uri 'http://127.0.0.1:4173/' -UseBasicParsing -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Seconds 2 }
+          }
+          $env:BASE_URL = 'http://127.0.0.1:4173'
+          $env:SHOTS_DIR = Join-Path $env:RUNNER_TEMP 'shots'
+          $c1 = Run-Script 'smoke' 'apps/web/scripts/smoke.mjs'
+          taskkill /PID $preview.Id /T /F | Out-Null
+          Remove-Item Env:BASE_URL
+          $c2 = Run-Script 'e2e-daemon' 'apps/web/scripts/e2e-daemon.mjs'
+          $c3 = Run-Script 'e2e-terminal' 'apps/web/scripts/e2e-terminal.mjs'
+          $c4 = Run-Script 'e2e-stage' 'apps/web/scripts/e2e-stage.mjs'
+          if (($c1 + $c2 + $c3 + $c4) -ne 0) { exit 1 }
+
+  old-node:
+    name: better-sqlite3 on Node 22.12.0 (information only)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+
+      - name: Install, then open a database through the bundled Windows binary, bypassing our version gate
+        run: |
+          npm install -g pnpm@10.28.0
+          pnpm install --frozen-lockfile
+          $install = $LASTEXITCODE
+          Write-Host "pnpm install exit code: $install"
+          Push-Location apps/daemon
+          node -e "const D = require('better-sqlite3'); const db = new D(':memory:'); console.log('opened a database, sqlite', db.prepare('select sqlite_version() as v').get().v)"
+          $raw = $LASTEXITCODE
+          Pop-Location
+          $nodeVersion = (node -v)
+          Write-Host "raw open on Node ${nodeVersion}: exit code $raw (0 = works; anything else = the crash the version gate exists for)"
+          pnpm --filter '@ai-assistant/daemon' check-native
+          $gate = $LASTEXITCODE
+          Write-Host "check-native exit code: $gate (expected 1, with a plain 'too old' message)"
+          exit 0
