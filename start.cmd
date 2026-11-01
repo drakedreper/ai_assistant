@@ -26,7 +26,7 @@ echo Building the app...
 call pnpm --filter @ai-assistant/web build
 if errorlevel 1 goto failed
 echo Starting Mira. Close this window to stop her.
-set OPEN_BROWSER=1
+if not defined OPEN_BROWSER set OPEN_BROWSER=1
 call pnpm --filter @ai-assistant/daemon start
 pause
 exit /b 0

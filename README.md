@@ -35,7 +35,7 @@ The daemon prints a one-time sign-in link (`http://127.0.0.1:7421/?code=...`); o
 | `pnpm typecheck` | `tsc` in every workspace package |
 | `pnpm test` | Vitest in `packages/shared` (contracts), `packages/agent-core` (lane, backends, parser), `packages/stage-core` (stage backend and conformance suite) and `apps/daemon` (security, hooks, store, WebSocket, terminal, stage) |
 | `scripts/verify.sh` | Everything in one command: typecheck, unit tests, build, mockup smoke test, the three end-to-end scripts and an orphan-process check, printed as a short table (`scripts/verify.sh quick` skips the browser parts) |
-| `start.cmd` / `scripts/start.sh` | Run the app from a clone in one step: install, build the web app, start the daemon (fake Claude), open the sign-in link in your browser (`OPEN_BROWSER=1`) |
+| `start.cmd` / `scripts/start.sh` | Run the app from a clone in one step: install, build the web app, start the daemon (fake Claude), open the sign-in link in your browser (`OPEN_BROWSER=0` skips that) |
 | `pnpm --filter @ai-assistant/web e2e` | End-to-end: a real daemon process and a real browser (sign-in, live hooks, chat, approvals, reconnect, restart) |
 | `node apps/web/scripts/e2e-terminal.mjs` | End-to-end for the embedded terminal (gate, real PTY, reattach, tickets, cross-origin refusals, process cleanup) |
 | `node apps/web/scripts/e2e-stage.mjs` | End-to-end for the stage backend with the simulator stage over the stage socket (outfit, speech frames, camera, refusals, restart resume, inspecting and forgetting what she remembers) |

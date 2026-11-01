@@ -19,4 +19,4 @@ pnpm --filter @ai-assistant/daemon check-native
 echo "Building the app..."
 pnpm --filter @ai-assistant/web build
 echo "Starting Mira. Press Ctrl+C to stop her."
-OPEN_BROWSER=1 exec pnpm --filter @ai-assistant/daemon start
+OPEN_BROWSER="${OPEN_BROWSER:-1}" exec pnpm --filter @ai-assistant/daemon start

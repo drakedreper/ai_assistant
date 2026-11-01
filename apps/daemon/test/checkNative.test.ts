@@ -114,6 +114,18 @@ describe('the real probe (a child process, so a crash cannot take the reporter d
   })
 })
 
+describe('the launchers keep an OPEN_BROWSER the caller already set', () => {
+  // Measured on a Windows runner: the browser the daemon opens uses the one-time sign-in code before anything else can,
+  // so a check that signs in over HTTP (and anyone who does not want a browser) needs OPEN_BROWSER=0 to be respected.
+  const read = (file: string) => readFileSync(path.join(repoRoot, file), 'utf8')
+  it('scripts/start.sh', () => {
+    expect(read('scripts/start.sh')).toContain('OPEN_BROWSER="${OPEN_BROWSER:-1}" exec pnpm')
+  })
+  it('start.cmd', () => {
+    expect(read('start.cmd')).toMatch(/^if not defined OPEN_BROWSER set OPEN_BROWSER=1\r?$/m)
+  })
+})
+
 describe('the Node minimum is the same everywhere it is stated', () => {
   const min = `${MIN_NODE.major}.${MIN_NODE.minor}`
   const read = (file: string) => readFileSync(path.join(repoRoot, file), 'utf8')

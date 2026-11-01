@@ -55,6 +55,9 @@ jobs:
       # The real launcher, run as a double-click runs it (no pnpm installed beforehand, so its own pnpm step is exercised).
       - name: start.cmd, then sign in over HTTP
         run: |
+          # The browser the daemon opens would use the one-time sign-in code before this step can (measured on the first
+          # run: Edge started and the exchange then got 401), so tell the launcher not to open one here.
+          $env:OPEN_BROWSER = '0'
           $log = Join-Path $env:RUNNER_TEMP 'start.log'
           $proc = Start-Process -FilePath 'cmd.exe' -ArgumentList '/d', '/c', 'start.cmd' -PassThru -NoNewWindow `
             -RedirectStandardOutput $log -RedirectStandardError "$log.err"
@@ -80,7 +83,6 @@ jobs:
           }
           Write-Host "::add-mask::$(($link -split 'code=')[1])"
           Start-Sleep -Seconds 5
-          "browsers started by OPEN_BROWSER: " + ((Get-Process msedge, chrome, firefox -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name -Unique) -join ', ')
           $base = ([uri]$link).GetLeftPart('Authority')
           $code = ($link -split 'code=')[1]
           $exchange = 'none'; $api = 'none'; $bytes = 0; $page = 'none'; $html = ''
@@ -110,6 +112,7 @@ jobs:
           "start.cmd path OK"
 
       - name: pnpm for the steps below
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: |
           corepack enable
@@ -117,11 +120,13 @@ jobs:
           exit 0
 
       - name: Typecheck (information)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 15
         run: pnpm -r typecheck
 
       - name: Unit tests per package (information)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 40
         run: |
@@ -137,11 +142,13 @@ jobs:
           if ($bad -gt 0) { exit 1 }
 
       - name: Playwright Chromium (information)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 15
         run: pnpm --filter '@ai-assistant/web' exec playwright install chromium
 
       - name: e2e scripts, one at a time (information)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 60
         run: |
