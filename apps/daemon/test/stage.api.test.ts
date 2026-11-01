@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { ServerEvent, StageMemoryList, StageSnapshot, Snapshot } from '@ai-assistant/shared'
+import { ServerEvent, STAGE_MEMORY_LIST_LIMIT, StageMemoryList, StageSnapshot, Snapshot } from '@ai-assistant/shared'
+import { DEFAULT_MEMORY_CAPACITY } from '@ai-assistant/stage-core'
 import { json, makeDaemon, type TestDaemon } from './helpers'
 
 const open: TestDaemon[] = []
@@ -649,7 +650,7 @@ describe('her memory: inspect and forget', () => {
     const r = await d.call('/api/stage/memory')
     expect(r.status).toBe(200)
     expect(r.headers.get('cache-control')).toBe('no-store')
-    expect(StageMemoryList.parse(await r.json())).toEqual({ total: 0, items: [], bySensitivity: { normal: 0, private: 0, sensitive: 0 } })
+    expect(StageMemoryList.parse(await r.json())).toEqual({ total: 0, unlisted: 0, items: [], bySensitivity: { normal: 0, private: 0, sensitive: 0 } })
   })
 
   it('lists what she wrote down, newest first, with its labels', async () => {
@@ -753,15 +754,66 @@ describe('her memory: inspect and forget', () => {
     expect((await list(d)).items.map((i) => i.id)).toEqual([fine])
   })
 
-  it('returns at most the newest 500 items and still reports the true total', async () => {
+  it('lists every item her memory can hold (the list limit is its capacity), the newest first, and still reports the true total', async () => {
+    expect(STAGE_MEMORY_LIST_LIMIT).toBeGreaterThanOrEqual(DEFAULT_MEMORY_CAPACITY) // otherwise something still in her prompt could be unlisted
     const d = await daemon()
     const repo = d.daemon.stage.hub.stageStore.memoryRepo()
-    for (let i = 0; i < 520; i++) repo.insert({ id: `mem.bulk-${String(i).padStart(4, '0')}`, kind: 'episode', text: `moment ${i}`, importance: 1, sensitivity: 'normal', tags: [], createdAt: T_OLD + i * 1000, updatedAt: T_OLD + i * 1000, recallCount: 0 })
+    const n = STAGE_MEMORY_LIST_LIMIT + 20 // a store written elsewhere may hold more than the service would
+    for (let i = 0; i < n; i++) repo.insert({ id: `mem.bulk-${String(i).padStart(4, '0')}`, kind: 'episode', text: `moment ${i}`, importance: 1, sensitivity: 'normal', tags: [], createdAt: T_OLD + i * 1000, updatedAt: T_OLD + i * 1000, recallCount: 0 })
     const l = await list(d)
-    expect(l.total).toBe(520)
-    expect(l.items).toHaveLength(500)
-    expect(l.items[0]?.id).toBe('mem.bulk-0519')
-    expect(l.items[499]?.id).toBe('mem.bulk-0020')
+    expect(l.total).toBe(n)
+    expect(l.items).toHaveLength(STAGE_MEMORY_LIST_LIMIT)
+    expect(l.items[0]?.id).toBe(`mem.bulk-${String(n - 1).padStart(4, '0')}`)
+    expect(l.items[STAGE_MEMORY_LIST_LIMIT - 1]?.id).toBe('mem.bulk-0020')
+  })
+
+  it('shows the label the prompt digest would use: a stored "normal" row that reads as private is labelled and counted as such', async () => {
+    const d = await daemon()
+    const repo = d.daemon.stage.hub.stageStore.memoryRepo()
+    const row = (id: string, text: string, at: number) => ({ id, kind: 'preference' as const, text, importance: 3, sensitivity: 'normal' as const, tags: [], createdAt: at, updatedAt: at, recallCount: 0 })
+    repo.insert(row('mem.plain', 'Likes quiet mornings', T_OLD))
+    repo.insert(row('mem.therapist', 'My therapist thinks I should rest more', T_OLD + 1000))
+    repo.insert(row('mem.pin', 'My PIN is 4821', T_OLD + 2000))
+    const l = await list(d)
+    const by = Object.fromEntries(l.items.map((i) => [i.id, i.sensitivity]))
+    expect(by['mem.plain']).toBe('normal')
+    expect(by['mem.therapist']).not.toBe('normal')
+    expect(by['mem.pin']).not.toBe('normal')
+    expect(l.bySensitivity.normal).toBe(1)
+    expect(l.bySensitivity.private + l.bySensitivity.sensitive).toBe(2)
+    // and the digest agrees: neither of them reaches it
+    const digest = d.daemon.stage.hub.memory.digest({ audience: 'cloud', maxChars: 900 }).text
+    expect(digest).toContain('quiet mornings')
+    expect(digest).not.toContain('therapist')
+    expect(digest).not.toContain('4821')
+  })
+
+  it('a row whose id cannot be addressed is counted, not listed, and forgetting everything still removes it', async () => {
+    const d = await daemon()
+    const fine = remember(d, { kind: 'preference', text: 'Likes the camera wide while she works' })
+    const repo = d.daemon.stage.hub.stageStore.memoryRepo()
+    for (const id of ['', '.', '..', 'x'.repeat(200)]) repo.insert({ id, kind: 'episode', text: `odd ${id.length}`, importance: 1, sensitivity: 'normal', tags: [], createdAt: T_OLD, updatedAt: T_OLD, recallCount: 0 })
+    const r = await d.call('/api/stage/memory')
+    expect(r.status).toBe(200)
+    const l = StageMemoryList.parse(await r.json()) // still validates: nothing breaks the list the web client reads
+    expect(l.total).toBe(5)
+    expect(l.unlisted).toBe(4)
+    expect(l.items.map((i) => i.id)).toEqual([fine])
+    const all = await d.call('/api/stage/memory?confirm=all', { method: 'DELETE' })
+    expect(((await all.json()) as { result: { forgotten: number } }).result.forgotten).toBe(5)
+    expect((await list(d)).total).toBe(0)
+  })
+
+  it('forgetting everything is one statement: a row SQLite cannot match by id goes too, and the count is the truth', async () => {
+    const d = await daemon()
+    remember(d, { kind: 'preference', text: 'Likes the camera wide while she works' })
+    const db = d.daemon.stage.hub.stageStore.db
+    db.prepare("INSERT INTO stage_memory (id, kind, text, importance, sensitivity, tags_json, created_at, updated_at, recall_count) VALUES (?, 'episode', 'a blob id', 1, 'normal', '[]', 1, 1, 0)").run(Buffer.from([1, 2, 3]))
+    expect((db.prepare('SELECT COUNT(*) AS n FROM stage_memory').get() as { n: number }).n).toBe(2)
+    const r = await d.call('/api/stage/memory?confirm=all', { method: 'DELETE' })
+    expect(((await r.json()) as { result: { forgotten: number } }).result.forgotten).toBe(2)
+    expect((db.prepare('SELECT COUNT(*) AS n FROM stage_memory').get() as { n: number }).n).toBe(0)
+    expect(d.daemon.store.listAudit(20).some((a) => /Forgot everything she remembered/.test(a.action) && a.detail === '2 items')).toBe(true)
   })
 })
 

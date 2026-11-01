@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { ServerEvent, STAGE_TOOL_SURFACE, TOOL_SURFACE, type ServerEvent as ServerEventT } from '@ai-assistant/shared'
 import { decodeFrame, utteranceIdHash } from '@ai-assistant/stage-core'
 import { connectSimulator, type SimClient } from '../src/stage/simClient'
+import { openStore } from '../src/store'
 import { daytimeClock, makeStageDaemon, sleep, until, type StageDaemon, type StageDaemonOptions } from '../src/stage/testing'
 
 /**
@@ -247,5 +248,105 @@ describe('what is real and what is not', () => {
     await d.stop()
     daemons.splice(daemons.indexOf(d), 1)
     await until('the stage side saw the close', () => !c.connected())
+  })
+})
+
+describe('what she writes down leaves no copy behind once you forget it', () => {
+  const TEXT = 'I take my tea without sugar'
+
+  /** Every row of the tables that could hold a copy, as text. The chat transcript is excluded on purpose: it holds the sentence YOU typed. */
+  const stored = (d: StageDaemon): string => {
+    const db = d.daemon.store.db
+    return JSON.stringify([db.prepare('SELECT * FROM approvals').all(), db.prepare('SELECT * FROM audit').all()])
+  }
+  const snapshotWithoutChat = async (d: StageDaemon): Promise<string> => {
+    const { chat: _transcript, ...rest } = (await (await d.call('/api/snapshot')).json()) as Record<string, unknown>
+    return JSON.stringify(rest)
+  }
+  type Card = { id: string; status: string; title: string; preview?: string; sensitive?: boolean }
+  const waitForCard = async (d: StageDaemon): Promise<Card> => {
+    let card: Card | undefined
+    await until('the approval card for the memory', async () => {
+      const snap = (await (await d.call('/api/snapshot')).json()) as { approvals: Card[] }
+      card = snap.approvals.find((a) => a.status === 'pending' && a.title === 'Remember something about you')
+      return card !== undefined
+    })
+    return card!
+  }
+  const decide = (d: StageDaemon, id: string, decision: 'approved' | 'denied') => d.call(`/api/approvals/${id}/decision`, { json: { decision } })
+
+  it('through the real lane and broker: the card shows it while you decide; once decided nothing stored or audited holds it; forgetting it leaves nothing', async () => {
+    const { d } = await boot()
+    expect((await chat(d, `Please remember that ${TEXT}`)).status).toBe(202)
+
+    const card = await waitForCard(d)
+    expect(card.preview).toContain(TEXT) // you have to see what she wants to write down
+    expect(card.sensitive).toBe(true)
+    expect(card.title).toBe('Remember something about you')
+
+    expect((await decide(d, card.id, 'approved')).ok).toBe(true)
+    await d.lane.whenIdle()
+    expect(d.hub.memory.list().map((i) => i.text)).toEqual([TEXT]) // she wrote it down
+    expect(stored(d)).not.toContain(TEXT) // but the approval and the audit log hold no copy
+    expect(await snapshotWithoutChat(d)).not.toContain(TEXT)
+    const audit = d.daemon.store.listAudit(100).filter((a) => a.action === 'tool:character_remember')
+    expect(audit.length).toBeGreaterThan(0)
+    for (const a of audit) expect(a.target).toBe('character_remember (preference)')
+
+    // it is listed, then forgotten, and nothing anywhere has it
+    const list = (await (await d.call('/api/stage/memory')).json()) as { items: Array<{ id: string; text: string }> }
+    expect(list.items.map((i) => i.text)).toEqual([TEXT])
+    expect((await d.call(`/api/stage/memory/${list.items[0]!.id}`, { method: 'DELETE' })).status).toBe(200)
+    expect(d.hub.memory.list()).toEqual([])
+    expect(stored(d)).not.toContain(TEXT)
+    expect(await snapshotWithoutChat(d)).not.toContain(TEXT)
+    expect(JSON.stringify(d.daemon.store.listAudit(500))).not.toContain(TEXT)
+  })
+
+  it('denied: nothing is written and no copy is kept either', async () => {
+    const { d } = await boot()
+    expect((await chat(d, `remember this: ${TEXT}`)).status).toBe(202)
+    const card = await waitForCard(d)
+    expect(card.preview).toContain(TEXT)
+    expect((await decide(d, card.id, 'denied')).ok).toBe(true)
+    await d.lane.whenIdle()
+    expect(d.hub.memory.list()).toEqual([])
+    expect(stored(d)).not.toContain(TEXT)
+    expect(await snapshotWithoutChat(d)).not.toContain(TEXT)
+  })
+
+  const orphan = (over: Record<string, unknown> = {}) =>
+    ({ id: 'ap-orphan', kind: 'tool_permission', title: 'Remember something about you', detail: 'x', requestedAt: '2026-11-02T10:00:00.000Z', status: 'pending', risk: 'low', tier: 'T2', preview: `preference: ${TEXT}`, sensitive: true, area: 'brain', ...over }) as const
+
+  it('a crash while the card is pending: the next start closes it and drops the sentence (a graceful stop already does)', async () => {
+    const { d } = await boot()
+    const dir = d.dataDir
+    await d.stop()
+    daemons.splice(daemons.indexOf(d), 1)
+    // the previous process died with the card pending: the row is in the stopped database exactly as the broker wrote it
+    const store = openStore({ file: join(dir, 'app.db') })
+    store.upsertApproval(orphan(), 'lane')
+    store.upsertApproval(orphan({ id: 'ap-plain', title: 'Edit a note', preview: 'an ordinary preview', sensitive: false }), 'lane') // not private: its preview stays
+    store.upsertApproval(orphan({ id: 'ap-hook' }), 'hook') // another origin: not this sweep's business
+    store.close()
+    const again = await makeStageDaemon({ dataDir: dir, db: 'app.db' })
+    daemons.push(again)
+    const snap = (await (await again.call('/api/snapshot')).json()) as { approvals: Card[] }
+    const by = Object.fromEntries(snap.approvals.map((a) => [a.id, a]))
+    expect(by['ap-orphan']).toMatchObject({ status: 'denied' })
+    expect(by['ap-orphan']?.preview).toBeUndefined()
+    expect(by['ap-plain']).toMatchObject({ status: 'denied', preview: 'an ordinary preview' }) // closed by the boot-time loop, which has always kept a non-private preview
+    expect(by['ap-hook']).toMatchObject({ status: 'pending' })
+    expect(JSON.stringify(again.daemon.store.db.prepare("SELECT * FROM approvals WHERE id = 'ap-orphan'").all())).not.toContain(TEXT)
+  })
+
+  it('clicking a card whose turn is gone closes it as denied and keeps no copy of the sentence', async () => {
+    const { d } = await boot()
+    d.daemon.store.upsertApproval(orphan(), 'lane') // pending in the database, unknown to the running broker
+    const r = await decide(d, 'ap-orphan', 'approved')
+    expect(r.status).toBe(409)
+    expect(((await r.json()) as { error: string }).error).toBe('stale_approval')
+    expect(stored(d)).not.toContain(TEXT)
+    expect(d.daemon.store.getApproval('ap-orphan')?.approval).toMatchObject({ status: 'denied' })
   })
 })

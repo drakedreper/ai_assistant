@@ -111,6 +111,8 @@ export const Approval = z.object({
   tier: z.enum(['T1', 'T2', 'T3', 'T4']),
   /** Monospace preview: the command, the draft, the diff... */
   preview: z.string().optional(),
+  /** The preview holds private text (what she wants to remember): blurred in Guest mode, and dropped from storage once decided. */
+  sensitive: z.boolean().optional(),
   /** Where the 'review' button leads. */
   area: z.enum(['work', 'brain', 'life', 'money']),
   /** The thing being decided: proposal id (brain_proposal), mail thread id (email_draft), event id... */

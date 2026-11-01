@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { Approval, TOOL_SURFACE } from '@ai-assistant/shared'
+import { Approval, STAGE_TOOL_SURFACE, TOOL_SURFACE } from '@ai-assistant/shared'
 import type { ServerEventDraft, ToolBinding, ToolSpec } from '@ai-assistant/shared'
-import { assessRisk, assessRiskDetailed, createMockToolBindings, createPermissionBroker, isOutside } from '../src'
+import { assessRisk, assessRiskDetailed, auditTarget, createMockToolBindings, createPermissionBroker, hasPrivateInput, isOutside } from '../src'
 import type { PermissionBroker, PermissionRequestEvent } from '../src'
 import { MemoryStore, NOW } from './helpers'
 
@@ -359,5 +359,93 @@ describe('isOutside', () => {
     expect(isOutside('D:\\x', 'C:\\dev\\app')).toBe(true)
     expect(isOutside('..\\x', 'C:\\dev\\app')).toBe(true)
     expect(isOutside('/etc/passwd', 'C:\\dev\\app')).toBe(true)
+  })
+})
+
+describe('a tool whose input is personal text (character_remember)', () => {
+  const TEXT = 'My therapist thinks I should rest more'
+  const input = { kind: 'episode', text: TEXT, importance: 3 }
+  const binding = (): ToolBinding => ({ spec: STAGE_TOOL_SURFACE.find((s) => s.name === 'character_remember')!, handler: async () => ({ text: 'ok' }) })
+  const ask = (broker: PermissionBroker, id = 'r1') => {
+    // the backend's own title and description are generated from the input and may quote it
+    const out = broker.request(req('character_remember', input, id, { title: `Remember: ${TEXT}`, description: TEXT }))
+    if (out.kind !== 'pending') throw new Error('expected a pending approval')
+    return out.approval
+  }
+
+  it('is flagged in the shared tool surface, and nothing else is', () => {
+    expect(hasPrivateInput('character_remember')).toBe(true)
+    expect(STAGE_TOOL_SURFACE.filter((s) => s.privateInput).map((s) => s.name)).toEqual(['character_remember'])
+    expect(TOOL_SURFACE.some((s) => s.privateInput)).toBe(false)
+  })
+
+  it('auditTarget names the tool and the kind, never the text; other tools keep the usual form', () => {
+    expect(auditTarget('character_remember', input)).toBe('character_remember (episode)')
+    expect(auditTarget('character_remember', { text: TEXT })).toBe('character_remember')
+    expect(auditTarget('character_remember', { kind: 'x'.repeat(200), text: TEXT })).toBe('character_remember') // the kind must be a short word
+    expect(auditTarget('character_remember', 'not even an object')).toBe('character_remember')
+    const usual = auditTarget('brain_search', { query: 'runway' })
+    expect(usual).toContain('brain_search')
+    expect(usual).toContain('runway')
+  })
+
+  it('while you decide, the card shows what she wants to write, marked sensitive, in fixed wording', () => {
+    const { broker, store, emitted } = setup([binding()])
+    const a = ask(broker)
+    expect(a.preview).toContain(TEXT)
+    expect(a.sensitive).toBe(true)
+    expect(a.title).toBe('Remember something about you')
+    expect(a.detail).not.toContain(TEXT) // not the backend's description either
+    expect(a.title).not.toContain(TEXT)
+    expect(a).toMatchObject({ kind: 'tool_permission', area: 'brain', tier: 'T2', status: 'pending' })
+    expect(Approval.safeParse(a).success).toBe(true)
+    expect(store.approvals.get(a.id)?.preview).toContain(TEXT) // pending: it has to be shown
+    expect(emitted.some((e) => e.type === 'approval.new')).toBe(true)
+  })
+
+  it('once approved, no copy is kept: not in the stored approval and not in the audit log', () => {
+    const { broker, store, emitted } = setup([binding()])
+    const a = ask(broker)
+    const decided = broker.decide(a.id, 'approved')
+    expect(decided?.decision).toEqual({ behavior: 'allow' })
+    const stored = store.approvals.get(a.id)!
+    expect(stored.status).toBe('approved')
+    expect(stored.preview).toBeUndefined()
+    expect(stored.sensitive).toBe(true)
+    expect(broker.pending()).toEqual([])
+    expect(store.auditLog).toHaveLength(1)
+    expect(store.auditLog[0]).toMatchObject({ actor: 'you', action: 'tool:character_remember', target: 'character_remember (episode)', outcome: 'approved', sensitive: true })
+    expect(JSON.stringify(store.auditLog)).not.toContain('therapist')
+    expect(JSON.stringify(store.approvals.get(a.id))).not.toContain('therapist')
+    expect(emitted.find((e) => e.type === 'approval.resolved')).toMatchObject({ id: a.id, status: 'approved' })
+  })
+
+  it('denied: no copy is kept either', () => {
+    const { broker, store } = setup([binding()])
+    const a = ask(broker)
+    broker.decide(a.id, 'denied')
+    expect(store.approvals.get(a.id)).toMatchObject({ status: 'denied' })
+    expect(store.approvals.get(a.id)?.preview).toBeUndefined()
+    expect(JSON.stringify(store.auditLog)).not.toContain('therapist')
+  })
+
+  it('expired (the backend stopped waiting): no copy is kept either', () => {
+    const { broker, store } = setup([binding()])
+    const a = ask(broker)
+    expect(broker.expire(a.id, 'turn ended')).toBe(true)
+    expect(store.approvals.get(a.id)?.preview).toBeUndefined()
+    expect(JSON.stringify(store.auditLog)).not.toContain('therapist')
+    const b = ask(broker, 'r2')
+    expect(broker.expireAll('interrupted')).toEqual([b.id])
+    expect(store.approvals.get(b.id)?.preview).toBeUndefined()
+  })
+
+  it('a tool that is not private keeps its preview after the decision (the card is still a record of what was approved)', () => {
+    const { broker, store } = setup()
+    const out = broker.request(req('brain_upsert_note', { path: '50-inbox/a.md', bodyPatch: 'some words' }))
+    if (out.kind !== 'pending') throw new Error('pending expected')
+    expect(out.approval.sensitive).toBeUndefined()
+    broker.decide(out.approval.id, 'approved')
+    expect(store.approvals.get(out.approval.id)?.preview).toContain('some words')
   })
 })

@@ -349,8 +349,8 @@ export const StageOutfitSuggestion = z.object({
 })
 export type StageOutfitSuggestion = z.infer<typeof StageOutfitSuggestion>
 
-/** The most items GET /api/stage/memory returns (the newest). `total` still counts everything stored. */
-export const STAGE_MEMORY_LIST_LIMIT = 500
+/** The most items GET /api/stage/memory returns (the newest): her memory holds 2000 notes at most, so this lists every one. */
+export const STAGE_MEMORY_LIST_LIMIT = 2000
 
 /**
  * One thing she wrote down with her memory tool. The text is your own data on your own PC, so you see all of it; the UI
@@ -371,6 +371,8 @@ export type StageMemoryItem = z.infer<typeof StageMemoryItem>
 export const StageMemoryList = z.object({
   /** Everything stored, not only the items returned. */
   total: z.number().int().nonnegative(),
+  /** Stored rows the list cannot show because their id cannot be addressed (an empty or oversized id). Forgetting everything removes them. */
+  unlisted: z.number().int().nonnegative(),
   /** Newest first, at most STAGE_MEMORY_LIST_LIMIT. */
   items: z.array(StageMemoryItem).max(STAGE_MEMORY_LIST_LIMIT),
   /** Counts over everything stored. */

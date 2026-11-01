@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentSession, BackendEvent, OpenSessionOptions, ToolBinding } from '@ai-assistant/shared'
-import { TOOL_SURFACE } from '@ai-assistant/shared'
+import { STAGE_TOOL_SURFACE, TOOL_SURFACE } from '@ai-assistant/shared'
 import { EmotionStreamParser, chunkSentence, createFakeBackend, createMockToolBindings, parseSentences } from '../src'
 import type { FakeBackendOptions } from '../src'
 import { NOW, collect, isTerminal } from './helpers'
@@ -282,6 +282,50 @@ describe('permission requests', () => {
     expect(rest.find((e) => e.type === 'tool_end')).toMatchObject({ ok: false, summary: 'The user said no.' })
     expect(deltas(rest)).toMatch(/I will not do that/)
     expect(rest.at(-1)?.type).toBe('turn_end')
+  })
+
+  describe('"remember that ..." writes to her character memory', () => {
+    const remember = () => {
+      const spec = STAGE_TOOL_SURFACE.find((x) => x.name === 'character_remember')!
+      const calls: unknown[] = []
+      const binding: ToolBinding = { spec, handler: async (input) => (calls.push(input), { text: 'Remembered.' }) }
+      return { calls, binding }
+    }
+
+    it('asks first, with the sentence she was told, and writes only after an approval', async () => {
+      const r = remember()
+      const { session } = await start({}, {}, [r.binding])
+      session.send(turn('Please remember that I take my tea without sugar'))
+      const { request } = await untilRequest(session)
+      expect(request).toMatchObject({ tool: 'character_remember', input: { kind: 'preference', text: 'I take my tea without sugar', importance: 3 } })
+      expect(r.calls).toEqual([]) // a T2 tool: nothing is written before the decision
+      session.resolvePermission(request.requestId, { behavior: 'allow' })
+      const rest = await collect(session, isTerminal)
+      expect(r.calls).toEqual([{ kind: 'preference', text: 'I take my tea without sugar', importance: 3 }])
+      expect(deltas(rest)).toMatch(/Okay, I will remember that/)
+    })
+
+    it('denied: nothing is written and she says so', async () => {
+      const r = remember()
+      const { session } = await start({}, {}, [r.binding])
+      session.send(turn('remember this: my sister is called Ana'))
+      const { request } = await untilRequest(session)
+      expect(request).toMatchObject({ input: { text: 'my sister is called Ana' } })
+      session.resolvePermission(request.requestId, { behavior: 'deny', message: 'The user said no.' })
+      const rest = await collect(session, isTerminal)
+      expect(r.calls).toEqual([])
+      expect(deltas(rest)).toMatch(/I will not write that down/)
+    })
+
+    it('only the imperative at the start of a message counts', async () => {
+      for (const text of ['Do you remember that meeting?', 'I remember that day well', 'remember that']) {
+        const r = remember()
+        const { session } = await start({}, {}, [r.binding])
+        const events = await say(session, text)
+        expect(kinds(events), text).not.toContain('permission_request')
+        expect(r.calls, text).toEqual([])
+      }
+    })
   })
 
   it('"delete" and "remove" and "rm" ask to edit a note', async () => {

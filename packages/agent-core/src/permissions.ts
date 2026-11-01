@@ -10,7 +10,7 @@
  * Previews are redacted before they are persisted or shown.
  */
 import nodePath from 'node:path'
-import { TOOL_SURFACE } from '@ai-assistant/shared'
+import { STAGE_TOOL_SURFACE, TOOL_SURFACE } from '@ai-assistant/shared'
 import type { Approval, AuditEntry, BackendEvent, LaneId, LaneStore, PermissionDecision, ServerEventDraft, ToolBinding, ToolSpec } from '@ai-assistant/shared'
 import { errorText, isRecord, oneLine, redactSecrets, safeJson, tierRank, truncate } from './util'
 
@@ -159,6 +159,23 @@ export const assessRisk = (spec: Pick<ToolSpec, 'name' | 'tier' | 'readOnly'>, i
 const AREA: Record<ToolSpec['server'], Approval['area']> = { brain: 'brain', calendar: 'life', mail: 'life', contacts: 'life', finance: 'money', worklog: 'work', news: 'life', stage: 'brain' }
 const SENSITIVE_SERVERS = new Set<ToolSpec['server']>(['mail', 'finance'])
 
+/** Tools whose input is personal text she wrote down (ToolSpec.privateInput): see hasPrivateInput and auditTarget. */
+const PRIVATE_INPUT = new Set([...TOOL_SURFACE, ...STAGE_TOOL_SURFACE].filter((s) => s.privateInput).map((s) => s.name))
+export const hasPrivateInput = (tool: string): boolean => PRIVATE_INPUT.has(tool)
+
+/**
+ * What an audit entry says a tool call was about. Ordinarily the tool and the start of its input (secrets masked). For a
+ * tool whose input is personal text it is the tool and at most one fixed word about it, never the text: an audit entry
+ * outlives the thing it records, and forgetting a memory must not leave a copy of it in the log.
+ */
+export function auditTarget(tool: string, input: unknown): string {
+  if (hasPrivateInput(tool)) {
+    const kind = isRecord(input) && typeof input.kind === 'string' && /^[a-z_]{1,24}$/.test(input.kind) ? ` (${input.kind})` : ''
+    return truncate(`${tool}${kind}`, 140)
+  }
+  return truncate(oneLine(redactSecrets(`${tool} ${safeJson(input)}`)), 140)
+}
+
 function approvalKind(tool: string): Approval['kind'] {
   if (tool === 'mail_send' || tool === 'mail_draft_reply') return 'email_draft'
   if (tool === 'calendar_propose_event') return 'calendar_event'
@@ -183,6 +200,10 @@ function describe(spec: ToolSpec, input: unknown, ev: PermissionRequestEvent, wh
       return { title: ev.title ?? `Propose a change to ${truncate(str(i.targetPath), 80)}`, detail: ev.description ?? 'Strategy notes change only through proposals you review.', preview: clip(Array.isArray(i.diff) ? i.diff.map(String).join('\n') : str(i.rationale)) }
     case 'worklog_create_task':
       return { title: ev.title ?? `Add a card: ${truncate(oneLine(str(i.title)), 80)}`, detail: ev.description ?? 'Adds a kanban card.', preview: clip(str(i.title)) }
+    case 'character_remember':
+      // Fixed wording: the backend's own title and description are generated from the input and may quote it. The card shows
+      // what she wants to write down (you must see it to decide) and nothing keeps it once you have.
+      return { title: 'Remember something about you', detail: `${who} wants to write this down in her memory. You can see and forget everything she remembers in Settings, Stage.`, preview: clip(`${str(i.kind) || 'note'}: ${str(i.text)}`) }
     default: {
       const command = COMMAND_FIELDS.map((f) => str(i[f])).find(Boolean)
       return {
@@ -194,13 +215,9 @@ function describe(spec: ToolSpec, input: unknown, ev: PermissionRequestEvent, wh
   }
 }
 
-function targetOf(tool: string, input: unknown): string {
-  return truncate(oneLine(redactSecrets(`${tool} ${safeJson(input)}`)), 140)
-}
-
 export function createPermissionBroker(deps: BrokerDeps): PermissionBroker {
   const allowed = new Map(deps.tools.map((b) => [b.spec.name, b.spec]))
-  const entries = new Map<string, { approval: Approval; requestId: string; tool: string; target: string; sensitive: boolean }>()
+  const entries = new Map<string, { approval: Approval; requestId: string; tool: string; target: string; sensitive: boolean; privateInput: boolean }>()
   const byRequest = new Map<string, string>()
 
   const audit = (entry: Omit<AuditEntry, 'id' | 'at'>): void => {
@@ -214,9 +231,13 @@ export function createPermissionBroker(deps: BrokerDeps): PermissionBroker {
   const finish = (id: string, status: 'approved' | 'denied'): void => {
     const e = entries.get(id)
     if (!e) return
-    e.approval = { ...e.approval, status }
+    const decided: Approval = { ...e.approval, status }
+    // What she wanted to write down was on the card only while you decided. Nothing keeps it afterwards, here or in storage.
+    if (e.privateInput) delete decided.preview
+    e.approval = decided
     byRequest.delete(e.requestId)
     try {
+      if (e.privateInput) deps.store.saveApproval(decided) // an upsert: the stored row loses its preview
       deps.store.setApprovalStatus(id, status)
     } catch (err) {
       audit({ actor: 'mira', action: 'approval.persist', target: id, outcome: 'blocked', detail: truncate(errorText(err), 120) })
@@ -227,8 +248,9 @@ export function createPermissionBroker(deps: BrokerDeps): PermissionBroker {
   return {
     request(ev) {
       const known = TOOL_SURFACE.find((s) => s.name === ev.tool)
-      const sensitive = known ? SENSITIVE_SERVERS.has(known.server) : false
-      const target = targetOf(ev.tool, ev.input)
+      const privateInput = hasPrivateInput(ev.tool)
+      const sensitive = (known ? SENSITIVE_SERVERS.has(known.server) : false) || privateInput
+      const target = auditTarget(ev.tool, ev.input)
 
       if (known?.locked) {
         audit({ actor: 'mira', action: `tool:${ev.tool}`, target, outcome: 'blocked', detail: 'Locked: this action can never be enabled.', sensitive })
@@ -258,10 +280,11 @@ export function createPermissionBroker(deps: BrokerDeps): PermissionBroker {
         risk: risk.level,
         tier: (['T1', 'T1', 'T2', 'T3', 'T4'] as const)[tierRank(spec.tier)] ?? 'T4',
         ...(d.preview ? { preview: d.preview } : {}),
+        ...(privateInput ? { sensitive: true } : {}),
         area: AREA[spec.server],
         ...(d.refId ? { refId: d.refId } : {}),
       }
-      entries.set(approval.id, { approval, requestId: ev.requestId, tool: spec.name, target, sensitive })
+      entries.set(approval.id, { approval, requestId: ev.requestId, tool: spec.name, target, sensitive, privateInput })
       byRequest.set(ev.requestId, approval.id)
       deps.store.saveApproval(approval)
       deps.emit({ type: 'approval.new', approval })

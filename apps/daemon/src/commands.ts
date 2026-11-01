@@ -146,6 +146,7 @@ export class Commands {
       if (!handled) {
         // The turn that asked is gone (daemon restart or interrupt). Close the card so the queue does not keep a dead item.
         store.setApprovalStatus(id, 'denied', this.nowIso())
+        if (approval.sensitive) store.upsertApproval({ ...approval, status: 'denied', preview: undefined }, 'lane') // no copy of private text stays behind
         bus.publish({ type: 'approval.resolved', id, status: 'denied' })
         throw new HttpError(409, 'stale_approval', 'That request belongs to a Claude turn that is no longer running, so it was closed as denied')
       }

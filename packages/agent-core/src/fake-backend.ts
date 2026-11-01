@@ -217,7 +217,7 @@ class FakeSession implements AgentSession {
     return { outcome: 'ran', result }
   }
 
-  private plan(text: string): { reads: ReadCall[]; action?: 'send' | 'edit' | 'spend'; reply?: Array<[Emotion, string]> } {
+  private plan(text: string): { reads: ReadCall[]; action?: 'send' | 'edit' | 'spend' | 'remember'; reply?: Array<[Emotion, string]> } {
     const lower = text.toLowerCase()
     const now = this.opts.now()
     const reads: ReadCall[] = []
@@ -244,8 +244,11 @@ class FakeSession implements AgentSession {
       reads.push({ tool: 'news_briefing', input: {}, label: 'the news', emotion: 'neutral' })
     }
 
-    let action: 'send' | 'edit' | 'spend' | undefined
-    if (has(/\b(spend|pay|transfer|wire)\b/)) action = 'spend'
+    let action: 'send' | 'edit' | 'spend' | 'remember' | undefined
+    // "(please) remember that I take my tea without sugar": writes to her character memory (a T2 tool, so it asks first).
+    // Only the imperative at the start of a message: "do you remember that meeting" must not write anything.
+    if (has(/^\s*(?:(?:please|pls),?\s+)?(?:(?:can|could|would) you\s+)?remember (?:that|this)\b[:,]?\s+\S/)) action = 'remember'
+    else if (has(/\b(spend|pay|transfer|wire)\b/)) action = 'spend'
     else if (has(/\bsend\b/)) action = 'send'
     else if (has(/\b(delete|remove|rm)\b/)) action = 'edit'
 
@@ -332,18 +335,21 @@ class FakeSession implements AgentSession {
       }
 
       if (go && plan.action) {
+        const remembered = (/remember (?:that|this)\b[:,]?\s+([\s\S]+)$/i.exec(turn.text)?.[1] ?? '').trim().slice(0, 300)
         const spec =
-          plan.action === 'send'
-            ? { tool: 'mail_send', input: { draftId: 'draft-priya-reply' }, title: 'Send the reply to Priya', description: 'The assistant wants to send a drafted email.' }
-            : plan.action === 'edit'
-              ? { tool: 'brain_upsert_note', input: { path: '50-inbox/scratch.md', bodyPatch: '(removed)' }, title: 'Edit note 50-inbox/scratch.md', description: 'The assistant wants to change a note in your vault.' }
-              : { tool: 'finance_move_money', input: {}, title: 'Move money', description: 'The assistant wants to move money.' }
+          plan.action === 'remember'
+            ? { tool: 'character_remember', input: { kind: 'preference', text: remembered, importance: 3 }, title: 'Remember something about you', description: 'The assistant wants to write something down in her memory.' }
+            : plan.action === 'send'
+              ? { tool: 'mail_send', input: { draftId: 'draft-priya-reply' }, title: 'Send the reply to Priya', description: 'The assistant wants to send a drafted email.' }
+              : plan.action === 'edit'
+                ? { tool: 'brain_upsert_note', input: { path: '50-inbox/scratch.md', bodyPatch: '(removed)' }, title: 'Edit note 50-inbox/scratch.md', description: 'The assistant wants to change a note in your vault.' }
+                : { tool: 'finance_move_money', input: {}, title: 'Move money', description: 'The assistant wants to move money.' }
         if (plan.reads.length > 0) go = await say('thinking', 'That last part needs your okay first.')
         if (go) {
           const out = await this.callTool(t, spec.tool, spec.input, { title: spec.title, description: spec.description })
           if (t.interrupted) go = false
-          else if (out.outcome === 'ran') go = await say(out.result.isError ? 'sad' : 'happy', out.result.isError ? `That did not work: ${truncate(firstLine(out.result.text), 120)}` : 'Done. It went through the mock tool, so nothing really changed.')
-          else if (out.outcome === 'denied') go = await say('neutral', 'Okay, I will not do that.')
+          else if (out.outcome === 'ran') go = await say(out.result.isError ? 'sad' : 'happy', out.result.isError ? `That did not work: ${truncate(firstLine(out.result.text), 120)}` : plan.action === 'remember' ? 'Okay, I will remember that.' : 'Done. It went through the mock tool, so nothing really changed.')
+          else if (out.outcome === 'denied') go = await say('neutral', plan.action === 'remember' ? 'Okay, I will not write that down.' : 'Okay, I will not do that.')
           else go = await say('sad', 'I cannot do that one at all.')
         }
       }

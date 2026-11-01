@@ -295,33 +295,38 @@ export class StageActions {
     // This list is also the way to find something in order to forget it, so one odd stored row must never break it: a
     // timestamp Date cannot represent would make toISOString() throw and hide every item.
     const iso = (ms: number): string => (Number.isFinite(ms) && Math.abs(ms) <= 8.64e15 ? new Date(ms).toISOString() : new Date(0).toISOString())
-    const view = (i: MemoryItem): StageMemoryItem => {
-      // a row with a label this code does not know is treated as the most protected one, like the digest does
-      const sensitivity = i.sensitivity === 'normal' || i.sensitivity === 'private' ? i.sensitivity : 'sensitive'
-      return {
-        id: i.id,
-        kind: i.kind === 'relationship' || i.kind === 'preference' ? i.kind : 'episode',
-        text: redactText(i.text, 500).slice(0, 500),
-        importance: Math.min(5, Math.max(1, Math.round(Number.isFinite(i.importance) ? i.importance : 1))),
-        sensitivity,
-        tags: i.tags.slice(0, 8).map((t) => t.slice(0, 40)),
-        createdAt: iso(i.createdAt),
-        updatedAt: iso(i.updatedAt),
-      }
-    }
-    for (const i of all) bySensitivity[i.sensitivity === 'normal' || i.sensitivity === 'private' ? i.sensitivity : 'sensitive']++
-    return { total: all.length, items: all.slice(-STAGE_MEMORY_LIST_LIMIT).reverse().map(view), bySensitivity }
+    // The id is the one field that cannot be cut to fit. A row whose id cannot go in a URL cannot be forgotten singly, so it is
+    // not listed but counted (forgetting everything still removes it).
+    const addressable = (id: string): boolean => typeof id === 'string' && id.length >= 1 && id.length <= 96 && id !== '.' && id !== '..'
+    // The label the digest would use (the stricter of what is stored and what the text reads as), so a stored "normal" row that
+    // reads as a PIN or a therapist note shows as what it is and is blurred in Guest mode.
+    const labelled = all.map((i) => ({ i, label: this.hub.memory.labelOf(i) }))
+    for (const { label } of labelled) bySensitivity[label]++
+    const listable = labelled.filter(({ i }) => addressable(i.id))
+    const view = ({ i, label }: { i: MemoryItem; label: StageMemoryItem['sensitivity'] }): StageMemoryItem => ({
+      id: i.id,
+      kind: i.kind === 'relationship' || i.kind === 'preference' ? i.kind : 'episode',
+      text: redactText(i.text, 500).slice(0, 500),
+      importance: Math.min(5, Math.max(1, Math.round(Number.isFinite(i.importance) ? i.importance : 1))),
+      sensitivity: label,
+      tags: i.tags.slice(0, 8).map((t) => t.slice(0, 40)),
+      createdAt: iso(i.createdAt),
+      updatedAt: iso(i.updatedAt),
+    })
+    return { total: all.length, unlisted: all.length - listable.length, items: listable.slice(-STAGE_MEMORY_LIST_LIMIT).reverse().map(view), bySensitivity }
   }
 
   forgetMemory(id: string): ActionResult<{ forgotten: number }> {
     const item = this.hub.memory.get(id)
     if (!item || !this.hub.memory.forget(id)) return fail(404, 'not_found', 'She does not remember that any more.')
-    this.hub.audit({ action: 'Forgot something she remembered', target: 'Her memory', outcome: 'auto', detail: `${item.kind}, ${item.sensitivity}` })
+    this.hub.stageStore.scrub()
+    this.hub.audit({ action: 'Forgot something she remembered', target: 'Her memory', outcome: 'auto', detail: `${item.kind}, ${this.hub.memory.labelOf(item)}` })
     return { ok: true, value: { forgotten: 1 }, sent: 0 }
   }
 
   forgetAllMemory(): ActionResult<{ forgotten: number }> {
-    const n = this.hub.memory.forgetWhere(() => true)
+    const n = this.hub.memory.forgetAll() // one statement: it also removes a row the list could not show
+    this.hub.stageStore.scrub()
     this.hub.audit({ action: 'Forgot everything she remembered', target: 'Her memory', outcome: 'auto', detail: `${n} item${n === 1 ? '' : 's'}` })
     return { ok: true, value: { forgotten: n }, sent: 0 }
   }

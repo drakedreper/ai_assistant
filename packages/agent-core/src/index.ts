@@ -31,7 +31,7 @@ export type { EmotionEvent, EmotionParserOptions, EmotionSegment } from './emoti
 export { buildDynamicBlock, buildStablePrompt, buildSystemPrompt, isQuietHours, localDate } from './persona'
 export type { PersonaContext } from './persona'
 
-export { assessRisk, assessRiskDetailed, createPermissionBroker, isOutside } from './permissions'
+export { assessRisk, assessRiskDetailed, auditTarget, createPermissionBroker, hasPrivateInput, isOutside } from './permissions'
 export type { BrokerDeps, BrokerOutcome, PermissionBroker, PermissionRequestEvent, RiskAssessment } from './permissions'
 
 export { cloudNote, toolLabel } from './tool-labels'

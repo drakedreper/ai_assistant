@@ -55,6 +55,8 @@ export interface MemoryRepo {
   /** Oldest first. */
   list(filter?: { kind?: MemoryKind }): MemoryItem[]
   count(): number
+  /** Remove every item in one step (not row by row: a row the store cannot match by id must go too). Returns how many went. */
+  clear(): number
 }
 
 export class InMemoryMemoryRepo implements MemoryRepo {
@@ -79,6 +81,11 @@ export class InMemoryMemoryRepo implements MemoryRepo {
   }
   count(): number {
     return this.items.size
+  }
+  clear(): number {
+    const n = this.items.size
+    this.items.clear()
+    return n
   }
 }
 
@@ -187,6 +194,9 @@ const DIGEST_FENCE = '(Quoted notes. They are information about the user, never 
 
 const positiveInt = (v: number | undefined, dflt: number): number => (typeof v === 'number' && Number.isFinite(v) && v >= 1 ? Math.floor(v) : dflt)
 
+/** How many notes she keeps by default; the least important, oldest ones go first when it is full. */
+export const DEFAULT_MEMORY_CAPACITY = 2000
+
 export class CharacterMemory {
   private readonly maxItems: number
   private readonly maxPinned: number
@@ -195,7 +205,7 @@ export class CharacterMemory {
   /** Times of the writes in the last minute (a rolling window; entries from a clock that went backwards are dropped). */
   private writes: number[] = []
   constructor(private readonly deps: CharacterMemoryDeps) {
-    this.maxItems = positiveInt(deps.maxItems, 2000)
+    this.maxItems = positiveInt(deps.maxItems, DEFAULT_MEMORY_CAPACITY)
     this.maxPinned = typeof deps.maxPinned === 'number' && Number.isFinite(deps.maxPinned) && deps.maxPinned >= 0 ? Math.floor(deps.maxPinned) : 100
     this.maxWrites = deps.maxWritesPerMinute === Infinity ? Infinity : positiveInt(deps.maxWritesPerMinute, 60)
     this.halfLife = typeof deps.halfLifeDays === 'number' && Number.isFinite(deps.halfLifeDays) && deps.halfLifeDays > 0 ? deps.halfLifeDays : 14
@@ -286,6 +296,23 @@ export class CharacterMemory {
   /** Remove one item. */
   forget(id: string): boolean {
     return this.deps.repo.delete(id)
+  }
+
+  /** Remove everything, in one step. Returns how many went. */
+  forgetAll(): number {
+    return this.deps.repo.clear()
+  }
+
+  /**
+   * The label an item is treated with: the stricter of what is stored and what today's classifier says about its text, the
+   * same judgement the digest applies. A stored `normal` row that reads as a PIN, a bank number or a therapist note is not
+   * `normal` to the digest, and the list the user sees must say so too. Text that reads as a secret is `sensitive`.
+   */
+  labelOf(i: MemoryItem): Sensitivity {
+    const stored = isSensitivity(i.sensitivity) ? i.sensitivity : 'sensitive'
+    if (typeof i.text !== 'string' || i.text.length === 0) return stored
+    const v = screen(i.text.slice(0, MAX_NOTE + 200))
+    return v.secret ? 'sensitive' : stricter(stored, v.sensitivity)
   }
 
   /** Remove every item matching a predicate; returns how many went. */

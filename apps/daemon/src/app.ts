@@ -109,6 +109,10 @@ export function createDaemon(opts: CreateDaemonOptions): Daemon {
   }
   const store = opts.store ?? openStore({ file: config.dbFile })
   if (!opts.store) hardenDbFiles(config.dbFile)
+  // Nothing is mid-turn when a daemon starts, so a pending approval that holds private text (what she wanted to remember) belongs
+  // to a turn that died with the previous process. It can never be answered: close it and drop the sentence. (The boot-time loop
+  // further down closes every other pending lane approval, but only flips its status, and only looks at the newest 500.)
+  store.closeOrphanedPrivateApprovals(new Date(clock()).toISOString())
 
   const security = createSecurity({
     dataDir: config.dataDir,

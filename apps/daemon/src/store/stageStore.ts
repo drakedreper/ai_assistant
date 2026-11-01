@@ -292,6 +292,23 @@ export class StageStore {
       count() {
         return num((self.st('SELECT COUNT(*) AS n FROM stage_memory').get() as Row).n)
       },
+      clear() {
+        // one statement, so a row whose id SQLite cannot match (a BLOB, say) goes too
+        return self.st('DELETE FROM stage_memory').run().changes
+      },
+    }
+  }
+
+  /**
+   * After something she remembered has been deleted. `secure_delete` zeroes the deleted bytes in the database file, but the
+   * write-ahead log still holds the older page images that contained them until a checkpoint resets it. Truncating the log
+   * releases them. (Backups, Claude's own transcripts and what the drive retains are out of reach, see docs/PRIVACY.md.)
+   */
+  scrub(): void {
+    try {
+      this.db.pragma('wal_checkpoint(TRUNCATE)')
+    } catch {
+      // a reader holds the log, or this is an in-memory database: the next checkpoint does it
     }
   }
 

@@ -38,10 +38,10 @@ import type {
 import { EmotionStreamParser } from './emotion'
 import type { EmotionEvent } from './emotion'
 import { buildDynamicBlock, buildStablePrompt, localDate } from './persona'
-import { createPermissionBroker } from './permissions'
+import { auditTarget, createPermissionBroker, hasPrivateInput } from './permissions'
 import type { PermissionBroker } from './permissions'
 import { cloudNote, toolLabel } from './tool-labels'
-import { BackendError, deferred, errorText, isAutoTier, oneLine, redactSecrets, safeJson, truncate } from './util'
+import { BackendError, deferred, errorText, isAutoTier, oneLine, redactSecrets, truncate } from './util'
 import type { Deferred } from './util'
 
 export interface LaneTimers {
@@ -560,10 +560,10 @@ export function createSecretaryLane(deps: LaneDeps, opts: LaneOptions = {}): Sec
             at: nowIso(),
             actor: 'mira',
             action: `tool:${ev.tool}`,
-            target: truncate(oneLine(redactSecrets(`${ev.tool} ${safeJson(ev.input)}`)), 140),
+            target: auditTarget(ev.tool, ev.input),
             outcome: 'auto',
             ...(cloud ? { sentToCloud: cloud } : {}),
-            ...(spec && (spec.server === 'mail' || spec.server === 'finance') ? { sensitive: true } : {}),
+            ...((spec && (spec.server === 'mail' || spec.server === 'finance')) || hasPrivateInput(ev.tool) ? { sensitive: true } : {}),
           })
         }
         return

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentBackend, ChatMessage, OpenSessionOptions } from '@ai-assistant/shared'
-import { createFakeBackend, BackendError, buildStablePrompt, createSecretaryLane } from '../src'
+import { STAGE_TOOL_SURFACE } from '@ai-assistant/shared'
+import type { AgentBackend, ChatMessage, OpenSessionOptions, ToolBinding } from '@ai-assistant/shared'
+import { createFakeBackend, BackendError, buildStablePrompt, createMockToolBindings, createSecretaryLane } from '../src'
 import { ManualBackend, MemoryStore, NOW, TAG_RE, fakeTimers, makeHarness, trace, turnOf, until, visibleChatText } from './helpers'
 
 const lastAssistant = (store: MemoryStore): ChatMessage => store.messages().filter((m) => m.role === 'assistant').at(-1)!
@@ -216,6 +217,20 @@ describe('tool calls', () => {
     expect(entry).toMatchObject({ actor: 'mira', outcome: 'auto', sensitive: true })
     expect(entry?.sentToCloud).toMatch(/Aggregates only/)
     expect(entry?.at).toBe(NOW.toISOString())
+  })
+
+  it('a tool whose input is personal text is audited without the text, also when it runs without a card', async () => {
+    const mb = new ManualBackend()
+    const remember: ToolBinding = { spec: STAGE_TOOL_SURFACE.find((x) => x.name === 'character_remember')!, handler: async () => ({ text: 'ok' }) }
+    const h = makeHarness({ backend: mb, tools: [...createMockToolBindings({ now: () => NOW }), remember], lane: { isAutoApproved: (x) => x.name === 'character_remember' } })
+    await h.lane.start()
+    await h.lane.send(turnOf('hi'))
+    mb.last.push({ type: 'tool_start', toolUseId: 't', tool: 'character_remember', input: { kind: 'episode', text: 'My therapist thinks I should rest more' } }, { type: 'tool_end', toolUseId: 't', ok: true }, { type: 'turn_end' })
+    await h.lane.whenIdle()
+    expect(h.store.auditLog.find((e) => e.action === 'tool:character_remember')).toMatchObject({ actor: 'mira', outcome: 'auto', target: 'character_remember (episode)', sensitive: true })
+    expect(JSON.stringify(h.store.auditLog)).not.toContain('therapist')
+    expect(JSON.stringify(h.store.messages())).not.toContain('therapist') // the chip is generic as well
+    expect(lastAssistant(h.store).parts[0]).toMatchObject({ type: 'tool', tool: 'character_remember', summary: 'used character_remember' })
   })
 
   it('chip text for long queries is truncated', async () => {

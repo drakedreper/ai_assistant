@@ -52,7 +52,10 @@ export function ApprovalCard({ id, variant = 'full', className }: { id: string; 
           <h3 className="text-[13px] leading-snug font-semibold text-fg">{ap.title}</h3>
           {variant === 'full' && <p className="mt-0.5 text-xs text-muted">{ap.detail}</p>}
           {ap.preview && (
-            <pre className="mt-2 max-h-24 overflow-auto rounded-lg border border-line bg-black/30 px-2.5 py-1.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-fg/90">
+            <pre
+              className="mt-2 max-h-24 overflow-auto rounded-lg border border-line bg-black/30 px-2.5 py-1.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-fg/90"
+              data-sensitive={ap.sensitive ? true : undefined}
+            >
               {ap.preview}
             </pre>
           )}

@@ -202,7 +202,15 @@ export const useStore = create<AppState>((set, get) => ({
           return { data: { ...d, approvals: upsertById(d.approvals, e.approval) } }
         case 'approval.resolved':
           return {
-            data: { ...d, approvals: d.approvals.map((a) => (a.id === e.id ? { ...a, status: e.status } : a)) },
+            data: {
+              ...d,
+              approvals: d.approvals.map((a) => {
+                if (a.id !== e.id) return a
+                // A card that held private text (what she wanted to remember) keeps no copy once it is decided, like the daemon's.
+                const { preview: _gone, ...rest } = a
+                return a.sensitive ? { ...rest, status: e.status } : { ...a, status: e.status }
+              }),
+            },
           }
         case 'task.update':
           return { data: { ...d, tasks: upsertById(d.tasks, e.task) } }

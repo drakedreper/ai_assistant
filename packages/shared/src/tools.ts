@@ -17,6 +17,12 @@ export interface ToolSpec {
   readOnly: boolean
   /** Never promotable to auto, whatever the trust history. */
   locked?: boolean
+  /**
+   * The input is personal text the assistant wrote down (her memory). It is never copied into an audit entry, the approval card
+   * is blurred in Guest mode, and the card's preview is dropped from storage once you have decided, so that forgetting the
+   * memory later does not leave copies behind (docs/PRIVACY.md sections 5 and 10).
+   */
+  privateInput?: boolean
   input: z.ZodType
 }
 
@@ -59,6 +65,6 @@ export const STAGE_TOOL_SURFACE: ToolSpec[] = [
   { name: 'stage_set_scene', server: 'stage', description: 'Switch to a saved scene preset or place/move/remove an object in the space.', lanes: ['secretary'], tier: 'T1', readOnly: false, input: z.object({ presetId: z.string().optional(), op: z.enum(['add', 'update', 'remove']).optional(), objectId: z.string().optional(), assetId: z.string().optional() }) },
   { name: 'stage_gesture', server: 'stage', description: 'Perform a gesture from the animation library, shaped by her presence style.', lanes: ['secretary'], tier: 'T1', readOnly: false, input: z.object({ clip: z.string(), intensity: z.number().min(0).max(1).default(0.7) }) },
   { name: 'stage_camera', server: 'stage', description: 'Move the camera to a named shot (wide, medium, closeup, profile, back, over_shoulder).', lanes: ['secretary'], tier: 'T1', readOnly: false, input: z.object({ shot: z.string() }) },
-  { name: 'character_remember', server: 'stage', description: 'Write a fact or moment to her persistent character memory (relationship, preference, episode).', lanes: ['secretary'], tier: 'T2', readOnly: false, input: z.object({ kind: z.enum(['episode', 'relationship', 'preference']), text: z.string().max(500), importance: z.number().int().min(1).max(5).default(2) }) },
+  { name: 'character_remember', server: 'stage', description: 'Write a fact or moment to her persistent character memory (relationship, preference, episode).', lanes: ['secretary'], tier: 'T2', readOnly: false, privateInput: true, input: z.object({ kind: z.enum(['episode', 'relationship', 'preference']), text: z.string().max(500), importance: z.number().int().min(1).max(5).default(2) }) },
   { name: 'stage_state', server: 'stage', description: 'Read her current look, mood, posture and the scene.', lanes: ['secretary', 'reader'], tier: 'T0', readOnly: true, input: z.object({}) },
 ]

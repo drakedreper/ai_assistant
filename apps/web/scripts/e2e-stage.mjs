@@ -590,6 +590,24 @@ try {
       if (n !== expected) throw new Error(`${id}: ${n} marks, expected ${expected}`)
     }
   })
+  await check('a forget that fails is shown with its reason, and the item stays (the refetch after it must not hide the error)', async () => {
+    expectRefusals++ // the browser logs the mocked 500 as a console error
+    const route = '**/api/stage/memory/mem.e2e-1'
+    await page.route(route, (r) =>
+      r.request().method() === 'DELETE'
+        ? r.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'database_busy', message: 'The database is busy. Try again in a moment.' }) })
+        : r.continue(),
+    )
+    try {
+      const item = page.locator('[data-memory="mem.e2e-1"]')
+      await item.locator('[data-action="forget"]').click()
+      await item.locator('[data-action="forget-confirm"]').click()
+      await page.locator('[data-testid="stage-error"]', { hasText: 'The database is busy' }).waitFor({ timeout: 10_000 })
+      if (!(await memoryIds()).includes('mem.e2e-1')) throw new Error('the item vanished although the forget failed')
+    } finally {
+      await page.unroute(route)
+    }
+  })
   await check('Keep cancels; Forget asks twice, then the item is gone from the page and the daemon, and its text is nowhere on the page', async () => {
     const item = page.locator('[data-memory="mem.e2e-2"]')
     await item.locator('[data-action="forget"]').click()
@@ -603,6 +621,65 @@ try {
     if ((await page.locator('main').innerText()).includes('late-night commits')) throw new Error('the forgotten text is still on the page')
   })
   await shot('what she remembers')
+
+  // ---------------------------------------------------------------- 8c. she writes something down
+  log('\n-- she writes something down (a real chat reply and a real approval card)')
+  const REMEMBERED = 'I take my tea without sugar'
+  const rememberCard = () => page.locator('article[aria-label*="Remember something about you"]')
+  /** Everything the daemon hands a browser except the chat transcript, which holds the sentence YOU typed. */
+  const noCopyOutsideChat = async () => {
+    const { chat, ...rest } = await getJson('/api/snapshot')
+    void chat
+    return !JSON.stringify(rest).includes(REMEMBERED)
+  }
+  await check('"remember that ..." makes her ask first: the card shows the sentence, marked for Guest mode, and nothing is written before you approve', async () => {
+    const composer = page.locator('aside[aria-label="Mira\'s room and chat"] textarea').first()
+    await composer.fill(`Please remember that ${REMEMBERED}`)
+    await composer.press('Enter')
+    await rememberCard().first().waitFor({ timeout: 30_000 })
+    const text = await rememberCard().first().innerText()
+    if (!text.includes(REMEMBERED)) throw new Error(`the card does not show what she wants to write: ${text.slice(0, 200)}`)
+    if ((await rememberCard().first().locator('pre[data-sensitive]').count()) !== 1) throw new Error('the preview is not marked for Guest mode')
+    const api = await getJson('/api/stage/memory')
+    if (api.items.some((m) => m.text === REMEMBERED)) throw new Error('written before the approval')
+  })
+  await check('Approve: it is written and shows in the panel; the decided card and everything the daemon stores hold no copy of the sentence', async () => {
+    await rememberCard().first().getByRole('button', { name: 'Approve' }).click()
+    await until('the panel lists it', async () => (await page.locator('[data-testid="stage-memory"] [data-memory]', { hasText: REMEMBERED }).count()) === 1, { timeout: 30_000 })
+    await until('the card is decided and no longer shows the sentence', async () => {
+      const t = await rememberCard().first().innerText()
+      return /Approved/.test(t) && !t.includes(REMEMBERED)
+    }, { timeout: 15_000 })
+    if (!(await noCopyOutsideChat())) throw new Error('a copy of the sentence is in the snapshot (approvals, audit log ...)')
+  })
+  await check('Forget it: gone from the panel and the daemon, and still no copy anywhere but the chat you typed', async () => {
+    const item = page.locator('[data-testid="stage-memory"] [data-memory]', { hasText: REMEMBERED })
+    await item.locator('[data-action="forget"]').click()
+    await item.locator('[data-action="forget-confirm"]').click()
+    await until('it is gone', async () => (await page.locator('[data-testid="stage-memory"] [data-memory]', { hasText: REMEMBERED }).count()) === 0)
+    const api = await getJson('/api/stage/memory')
+    if (api.items.some((m) => m.text === REMEMBERED)) throw new Error('still stored')
+    if (!(await noCopyOutsideChat())) throw new Error('a copy of the sentence is still in the snapshot after forgetting')
+    if ((await memoryIds()).join() !== 'mem.e2e-3,mem.e2e-1') throw new Error(`the other items changed: ${(await memoryIds()).join()}`)
+  })
+
+  await check('an armed "Forget everything" disarms when the list changes underneath it (she writes something new while you hesitate)', async () => {
+    await page.locator('[data-action="forget-all"]').click()
+    await page.locator('[data-action="forget-all-confirm"]').waitFor({ timeout: 5000 })
+    const composer = page.locator('aside[aria-label="Mira\'s room and chat"] textarea').first()
+    await composer.fill('Please remember that I like green tea in the afternoon')
+    await composer.press('Enter')
+    const pending = page.locator('article[aria-label*="Remember something about you"]', { has: page.getByRole('button', { name: 'Approve' }) })
+    await pending.first().waitFor({ timeout: 30_000 })
+    await pending.first().getByRole('button', { name: 'Approve' }).click()
+    await until('the new item is listed', async () => (await page.locator('[data-testid="stage-memory"] [data-memory]', { hasText: 'green tea' }).count()) === 1, { timeout: 30_000 })
+    await until('the armed button went back to its first state', async () => (await page.locator('[data-action="forget-all-confirm"]').count()) === 0 && (await page.locator('[data-action="forget-all"]').count()) === 1, { timeout: 10_000 })
+    // put things back for the checks that follow
+    const item = page.locator('[data-testid="stage-memory"] [data-memory]', { hasText: 'green tea' })
+    await item.locator('[data-action="forget"]').click()
+    await item.locator('[data-action="forget-confirm"]').click()
+    await until('it is gone again', async () => (await memoryIds()).join() === 'mem.e2e-3,mem.e2e-1')
+  })
 
   // ---------------------------------------------------------------- 9. disconnect and the switch
   log('\n-- disconnect and the switch')

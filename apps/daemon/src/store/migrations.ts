@@ -261,6 +261,15 @@ export const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    version: 4,
+    name: 'approvals: private preview flag',
+    up(db) {
+      // An approval card whose preview holds private text (what she wants to remember): blurred in Guest mode, and the preview is
+      // dropped from storage once it is decided. Without a column the flag survived only in the live event, not in a snapshot.
+      db.exec(`ALTER TABLE approvals ADD COLUMN sensitive INTEGER NOT NULL DEFAULT 0;`)
+    },
+  },
 ]
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0

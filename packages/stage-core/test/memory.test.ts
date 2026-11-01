@@ -5,6 +5,7 @@ import {
   BehaviorDirector,
   CameraDirector,
   CharacterMemory,
+  DEFAULT_MEMORY_CAPACITY,
   InMemoryMemoryRepo,
   InMemorySceneRepo,
   MoodEngine,
@@ -340,6 +341,41 @@ function toolRig() {
   }
   return { vt, characters, wardrobe, scenes, memory, tools, call, performed, assistant: created.value, moodE }
 }
+
+describe('forgetting everything, and the label an item is treated with', () => {
+  const stored = (over: Record<string, unknown>) => ({ id: 'mem.x', kind: 'preference' as const, text: 'Likes quiet mornings', importance: 3, sensitivity: 'normal' as const, tags: [], createdAt: T0, updatedAt: T0, recallCount: 0, ...over })
+
+  it('forgetAll removes everything in one step and says how many went', () => {
+    const { memory, repo } = mem()
+    memory.remember({ kind: 'preference', text: 'Likes the camera wide while she works' })
+    memory.remember({ kind: 'relationship', text: 'Calls the user by a shortened name' })
+    expect(memory.forgetAll()).toBe(2)
+    expect(memory.list()).toEqual([])
+    expect(repo.count()).toBe(0)
+    expect(memory.forgetAll()).toBe(0)
+    expect(memory.digest().text).toBe('')
+  })
+
+  it('the default capacity is the one the list route promises to show', () => {
+    expect(DEFAULT_MEMORY_CAPACITY).toBe(2000)
+    const { memory, repo } = mem()
+    for (let i = 0; i < DEFAULT_MEMORY_CAPACITY + 5; i++) repo.insert(stored({ id: `mem.${i}`, text: `moment ${i}`, createdAt: T0 + i }))
+    expect(memory.list()).toHaveLength(DEFAULT_MEMORY_CAPACITY + 5) // a store written elsewhere may hold more; the service only caps new writes
+  })
+
+  it('labelOf is the stricter of what is stored and what the text reads as, like the digest', () => {
+    const { memory } = mem()
+    expect(memory.labelOf(stored({ text: 'Likes quiet mornings' }))).toBe('normal')
+    expect(memory.labelOf(stored({ text: 'Likes quiet mornings', sensitivity: 'private' }))).toBe('private')
+    expect(memory.labelOf(stored({ text: 'Likes quiet mornings', sensitivity: 'odd' as 'normal' }))).toBe('sensitive') // an unknown label is the most protected one
+    const therapist = stored({ text: 'My therapist thinks I should rest more' })
+    expect(memory.labelOf(therapist)).not.toBe('normal')
+    expect(memory.digest({ audience: 'cloud' }).text).toBe('') // nothing of it reaches the digest for the cloud
+    expect(memory.labelOf(stored({ text: 'the key is sk-ant-api03-abcdefghijklmnop1234' }))).toBe('sensitive')
+    expect(memory.labelOf(stored({ text: '' }))).toBe('normal')
+    expect(memory.labelOf(stored({ text: 123 as unknown as string }))).toBe('normal') // a damaged row does not throw
+  })
+})
 
 describe('createStageToolBindings', () => {
   it('binds exactly the stage tool surface, with its specs', () => {

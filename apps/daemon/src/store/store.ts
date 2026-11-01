@@ -420,11 +420,11 @@ export class Store {
 
   upsertApproval(a: Approval, origin: ApprovalOrigin): void {
     this.st(
-      `INSERT INTO approvals (id, ord, kind, title, detail, requested_at, session_id, status, risk, tier, preview, area, ref_id, origin)
-       VALUES (@id, @ord, @kind, @title, @detail, @requestedAt, @sessionId, @status, @risk, @tier, @preview, @area, @refId, @origin)
+      `INSERT INTO approvals (id, ord, kind, title, detail, requested_at, session_id, status, risk, tier, preview, sensitive, area, ref_id, origin)
+       VALUES (@id, @ord, @kind, @title, @detail, @requestedAt, @sessionId, @status, @risk, @tier, @preview, @sensitive, @area, @refId, @origin)
        ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, title = excluded.title, detail = excluded.detail,
          requested_at = excluded.requested_at, session_id = excluded.session_id, status = excluded.status, risk = excluded.risk,
-         tier = excluded.tier, preview = excluded.preview, area = excluded.area, ref_id = excluded.ref_id`,
+         tier = excluded.tier, preview = excluded.preview, sensitive = excluded.sensitive, area = excluded.area, ref_id = excluded.ref_id`,
     ).run({
       id: a.id,
       ord: this.nextOrd('approvals'),
@@ -437,6 +437,7 @@ export class Store {
       risk: a.risk,
       tier: a.tier,
       preview: a.preview ?? null,
+      sensitive: a.sensitive ? 1 : 0,
       area: a.area,
       refId: a.refId ?? null,
       origin,
@@ -445,6 +446,16 @@ export class Store {
 
   setApprovalStatus(id: string, status: Approval['status'], decidedAt?: string): boolean {
     return this.st('UPDATE approvals SET status = ?, decided_at = ? WHERE id = ?').run(status, decidedAt ?? null, id).changes > 0
+  }
+
+  /**
+   * Pending lane approvals whose preview holds private text (what she wanted to remember) belong to a turn that died with the
+   * previous process (a crash or a kill; a graceful stop closes them itself and drops the preview). Nothing is mid-turn when a
+   * daemon starts, so they can never be answered: close them as denied and drop the sentence instead of keeping it in the
+   * database. Returns how many were closed.
+   */
+  closeOrphanedPrivateApprovals(decidedAt: string): number {
+    return this.st(`UPDATE approvals SET status = 'denied', preview = NULL, decided_at = ? WHERE origin = 'lane' AND sensitive = 1 AND status = 'pending'`).run(decidedAt).changes
   }
 
   private rowToApproval(r: Row): Approval {
@@ -459,6 +470,7 @@ export class Store {
       risk: str(r.risk) as Approval['risk'],
       tier: str(r.tier) as Approval['tier'],
       ...(optStr(r.preview) ? { preview: str(r.preview) } : {}),
+      ...(Number(r.sensitive) === 1 ? { sensitive: true } : {}),
       area: str(r.area) as Approval['area'],
       ...(optStr(r.ref_id) ? { refId: str(r.ref_id) } : {}),
     }
