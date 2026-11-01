@@ -1,0 +1,5 @@
+{
+  "type": "speak.started",
+  "utteranceId": "utt-0001",
+  "stageMs": 2000
+}

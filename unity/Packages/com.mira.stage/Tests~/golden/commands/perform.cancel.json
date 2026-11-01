@@ -1,0 +1,6 @@
+{
+  "id": "cmd-013",
+  "type": "perform.cancel",
+  "utteranceId": "utt-0001",
+  "fadeMs": 120
+}

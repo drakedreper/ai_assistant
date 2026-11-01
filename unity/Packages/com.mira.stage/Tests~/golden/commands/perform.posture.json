@@ -1,0 +1,7 @@
+{
+  "id": "cmd-017",
+  "type": "perform.posture",
+  "posture": "sit",
+  "anchorObjectId": "obj.chair",
+  "anchorId": "sit"
+}

@@ -1,0 +1,33 @@
+{
+  "id": "cmd-003",
+  "type": "character.equip",
+  "characterId": "char.assistant",
+  "slot": "top",
+  "assetId": "asset.top.blazer",
+  "asset": {
+    "id": "asset.top.blazer",
+    "kind": "outfit",
+    "name": "Blazer",
+    "tags": [
+      "work"
+    ],
+    "rigFamilies": [
+      "vrm1"
+    ],
+    "locator": "vrm:Outfits/blazer.vrm",
+    "slots": [
+      "top"
+    ],
+    "hides": [
+      "torso",
+      "arms"
+    ],
+    "params": [],
+    "license": {
+      "id": "vendor-eula",
+      "personalUse": true,
+      "commercialUse": false,
+      "redistribution": false
+    }
+  }
+}

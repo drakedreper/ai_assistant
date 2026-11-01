@@ -1,0 +1,5 @@
+{
+  "type": "object.clicked",
+  "objectId": "obj.chair",
+  "button": "primary"
+}

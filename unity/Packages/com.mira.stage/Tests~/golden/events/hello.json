@@ -1,0 +1,29 @@
+{
+  "type": "hello",
+  "protocol": "mira-stage/1",
+  "capabilities": {
+    "engine": "unity",
+    "engineVersion": "6000.0.0f1",
+    "rigFamilies": [
+      "vrm1"
+    ],
+    "face": {
+      "arkit52": true,
+      "visemes": false,
+      "audioToFaceOnStage": false
+    },
+    "render": {
+      "strandHair": false,
+      "clothSim": false,
+      "runtimeAssetLoading": true,
+      "embeddedStream": false
+    },
+    "tracking": {
+      "face": false,
+      "body": false
+    },
+    "constructs": [],
+    "maxCharacters": 2
+  },
+  "stageClockMs": 1234.5
+}

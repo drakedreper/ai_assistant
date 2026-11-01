@@ -1,0 +1,22 @@
+{
+  "id": "cmd-mvxtuel4-p-94bf",
+  "atMs": 3103,
+  "type": "perform.speak",
+  "utteranceId": "utt-mvxtuekk-m-3ce2",
+  "text": "4 events between 2026-11-01 and 2026-11-01.",
+  "emotion": "happy",
+  "emotionTimeline": [
+    {
+      "tMs": 0,
+      "emotion": "happy",
+      "intensity": 0.7
+    }
+  ],
+  "audio": {
+    "format": "pcm_s16le",
+    "sampleRate": 24000,
+    "channels": 1,
+    "totalMs": 831
+  },
+  "faceSource": "backend"
+}

@@ -1,0 +1,35 @@
+{
+  "id": "cmd-007",
+  "type": "scene.construct",
+  "op": "add",
+  "construct": {
+    "id": "construct.brain",
+    "kind": "knowledge_graph",
+    "transform": {
+      "position": [
+        0,
+        1.5,
+        -2
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "source": "brain",
+    "query": {},
+    "style": {
+      "palette": "cool",
+      "density": 0.5,
+      "scale": 1
+    },
+    "interactive": true
+  }
+}

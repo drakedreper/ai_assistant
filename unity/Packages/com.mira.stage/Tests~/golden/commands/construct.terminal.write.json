@@ -1,0 +1,6 @@
+{
+  "id": "cmd-009",
+  "type": "construct.terminal.write",
+  "constructId": "construct.term",
+  "data": "hello\r\n"
+}

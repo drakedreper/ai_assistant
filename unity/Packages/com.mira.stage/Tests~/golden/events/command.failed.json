@@ -1,0 +1,5 @@
+{
+  "type": "command.failed",
+  "id": "cmd-001",
+  "reason": "rig family custom is not supported"
+}

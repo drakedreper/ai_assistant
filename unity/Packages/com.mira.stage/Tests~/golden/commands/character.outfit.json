@@ -1,0 +1,62 @@
+{
+  "id": "cmd-004",
+  "type": "character.outfit",
+  "characterId": "char.assistant",
+  "preset": {
+    "id": "preset.work",
+    "name": "Work",
+    "equipped": {
+      "hair": null,
+      "hairAccessory": null,
+      "headwear": null,
+      "glasses": null,
+      "earrings": null,
+      "neck": null,
+      "top": "asset.top.blazer",
+      "bottom": null,
+      "fullBody": null,
+      "outerwear": null,
+      "legwear": null,
+      "footwear": null,
+      "gloves": null,
+      "wristwear": null,
+      "back": null,
+      "tail": null
+    },
+    "tweaks": {
+      "asset.top.blazer": {
+        "color": "#202020",
+        "fit": 0.5
+      }
+    },
+    "context": {}
+  },
+  "assets": [
+    {
+      "id": "asset.top.blazer",
+      "kind": "outfit",
+      "name": "Blazer",
+      "tags": [
+        "work"
+      ],
+      "rigFamilies": [
+        "vrm1"
+      ],
+      "locator": "vrm:Outfits/blazer.vrm",
+      "slots": [
+        "top"
+      ],
+      "hides": [
+        "torso",
+        "arms"
+      ],
+      "params": [],
+      "license": {
+        "id": "vendor-eula",
+        "personalUse": true,
+        "commercialUse": false,
+        "redistribution": false
+      }
+    }
+  ]
+}

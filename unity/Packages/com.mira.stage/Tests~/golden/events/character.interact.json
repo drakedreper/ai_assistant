@@ -1,0 +1,6 @@
+{
+  "type": "character.interact",
+  "characterId": "char.assistant",
+  "region": "hand",
+  "kind": "click"
+}

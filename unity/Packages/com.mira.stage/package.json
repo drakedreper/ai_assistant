@@ -1,0 +1,12 @@
+{
+  "name": "com.mira.stage",
+  "version": "0.1.0",
+  "displayName": "Mira Stage",
+  "description": "The Unity side of the mira-stage/1 protocol: connects to the Mira daemon, receives the character, scene and performance commands, plays the audio and face frames, and reports back. An engine-agnostic core (Runtime/*.cs, no UnityEngine, tested outside Unity); the Unity layer (Runtime/Unity: main thread, VRM, scene, audio) is added on the PC, see docs/UNITY.md in the repository.",
+  "unity": "6000.0",
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  },
+  "keywords": ["mira", "stage", "assistant", "vrm"],
+  "author": { "name": "Mira" }
+}

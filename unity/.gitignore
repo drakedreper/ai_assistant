@@ -1,0 +1,42 @@
+# Everything under unity/ that a tool generates. The package (Packages/com.mira.stage) and its Tests~ projects are ours.
+
+# .NET SDK output of the test projects (dotnet test)
+bin/
+obj/
+TestResults/
+
+# Unity's own folders, in a Unity project made under unity/ (unity projects create ...)
+[Ll]ibrary/
+[Tt]emp/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Bb]uild/
+[Bb]uilds/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+.vs/
+.idea/
+.vscode/
+
+# Files Unity and the IDEs generate in the project root (the .csproj files of Tests~ are two folders deeper and are kept)
+/*/*.csproj
+/*/*.sln
+/*/*.slnx
+/*/*.user
+/*/.utmp/
+crashlytics-build.properties
+
+# Binary models and art are never committed (CLAUDE.md invariant: the catalog is metadata only). They live in the
+# content pack on the PC (MIRA_CONTENT_DIR, default ~/Mira/content), not in this repository.
+*.vrm
+*.glb
+*.gltf
+*.fbx
+*.blend
+*.unitypackage
+*.psd
+*.exr
+*.hdr
+*.wav
+*.mp3
+*.ogg

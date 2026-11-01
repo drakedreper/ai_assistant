@@ -1,0 +1,113 @@
+{
+  "id": "cmd-001",
+  "type": "character.load",
+  "character": {
+    "id": "char.assistant",
+    "role": "assistant",
+    "name": "Mira",
+    "baseAssetId": "asset.base.vrm",
+    "rigFamily": "vrm1",
+    "params": {
+      "height": 1.72,
+      "skin.tone": "#d9b08c"
+    },
+    "equipped": {
+      "hair": null,
+      "hairAccessory": null,
+      "headwear": null,
+      "glasses": null,
+      "earrings": null,
+      "neck": null,
+      "top": "asset.top.blazer",
+      "bottom": null,
+      "fullBody": null,
+      "outerwear": null,
+      "legwear": null,
+      "footwear": null,
+      "gloves": null,
+      "wristwear": null,
+      "back": null,
+      "tail": null
+    },
+    "presets": [],
+    "voice": {
+      "provider": "kokoro",
+      "voiceId": "af_heart",
+      "speed": 1,
+      "pitchSemitones": 0
+    },
+    "presence": {
+      "uprightness": 0.8,
+      "gestureEconomy": 0.75,
+      "gazeHold": 0.8,
+      "pace": 0.65,
+      "athleticism": 0.8,
+      "baseline": {
+        "valence": 0.2,
+        "arousal": -0.1,
+        "dominance": 0.7
+      }
+    },
+    "personaId": "default",
+    "createdAt": "2026-11-01T10:00:00.000Z",
+    "updatedAt": "2026-11-01T10:00:00.000Z"
+  },
+  "assets": [
+    {
+      "id": "asset.base.vrm",
+      "kind": "character_base",
+      "name": "Base body",
+      "tags": [],
+      "rigFamilies": [
+        "vrm1"
+      ],
+      "locator": "vrm:Characters/base.vrm",
+      "slots": [],
+      "hides": [],
+      "params": [
+        {
+          "id": "height",
+          "group": "body",
+          "label": "Height",
+          "min": 1.5,
+          "max": 1.9,
+          "default": 1.72,
+          "type": "scalar"
+        }
+      ],
+      "license": {
+        "id": "vendor-eula",
+        "personalUse": true,
+        "commercialUse": false,
+        "redistribution": false,
+        "adultExpression": false
+      }
+    },
+    {
+      "id": "asset.top.blazer",
+      "kind": "outfit",
+      "name": "Blazer",
+      "tags": [
+        "work"
+      ],
+      "rigFamilies": [
+        "vrm1"
+      ],
+      "locator": "vrm:Outfits/blazer.vrm",
+      "slots": [
+        "top"
+      ],
+      "hides": [
+        "torso",
+        "arms"
+      ],
+      "params": [],
+      "license": {
+        "id": "vendor-eula",
+        "personalUse": true,
+        "commercialUse": false,
+        "redistribution": false
+      }
+    }
+  ]
+}

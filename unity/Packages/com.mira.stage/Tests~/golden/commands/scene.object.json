@@ -1,0 +1,54 @@
+{
+  "id": "cmd-006",
+  "type": "scene.object",
+  "op": "add",
+  "object": {
+    "id": "obj.chair",
+    "assetId": "asset.prop.chair",
+    "transform": {
+      "position": [
+        1,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "parentId": null,
+    "role": "furniture",
+    "anchors": [
+      {
+        "id": "sit",
+        "kind": "sit",
+        "local": {
+          "position": [
+            0,
+            0.45,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    ],
+    "visible": true
+  }
+}

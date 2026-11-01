@@ -1,0 +1,22 @@
+{
+  "id": "cmd-mvxtuekh-l-e6a6",
+  "atMs": 2634,
+  "type": "perform.speak",
+  "utteranceId": "utt-mvxtuek8-j-bbdc",
+  "text": "Let me check your calendar.",
+  "emotion": "thinking",
+  "emotionTimeline": [
+    {
+      "tMs": 0,
+      "emotion": "thinking",
+      "intensity": 0.7
+    }
+  ],
+  "audio": {
+    "format": "pcm_s16le",
+    "sampleRate": 24000,
+    "channels": 1,
+    "totalMs": 329
+  },
+  "faceSource": "backend"
+}

@@ -1,0 +1,9 @@
+{
+  "id": "cmd-002",
+  "type": "character.params",
+  "characterId": "char.assistant",
+  "params": {
+    "height": 1.78
+  },
+  "blendMs": 300
+}

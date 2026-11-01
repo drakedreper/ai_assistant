@@ -1,0 +1,10 @@
+{
+  "id": "cmd-011",
+  "type": "scene.lighting",
+  "lighting": {
+    "id": "light.night",
+    "name": "Night",
+    "mode": "fixed",
+    "look": "night"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "type": "user.presence",
+  "present": true,
+  "lookingAtScreen": true,
+  "distance": "near"
+}

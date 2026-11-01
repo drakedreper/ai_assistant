@@ -1,0 +1,104 @@
+{
+  "id": "cmd-005",
+  "type": "scene.load",
+  "scene": {
+    "id": "scene.void",
+    "name": "Cerebral void",
+    "environmentAssetId": "asset.env.void",
+    "objects": [],
+    "constructs": [],
+    "cameras": [
+      {
+        "id": "wide",
+        "name": "Wide",
+        "transform": {
+          "position": [
+            0,
+            1.6,
+            4
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "fovDeg": 50,
+        "follow": "none",
+        "depthOfField": 0
+      },
+      {
+        "id": "closeup",
+        "name": "Closeup",
+        "transform": {
+          "position": [
+            0,
+            1.6,
+            1
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "fovDeg": 35,
+        "follow": "face",
+        "depthOfField": 0.6
+      }
+    ],
+    "activeCameraId": "wide",
+    "lighting": {
+      "id": "light.void",
+      "name": "Void",
+      "mode": "fixed",
+      "look": "void",
+      "atmosphere": {
+        "ground": "void",
+        "fogColor": "#0a1a3a",
+        "fogDensity": 0.55,
+        "volumetrics": true,
+        "dustMotes": 0.35,
+        "floorPool": {
+          "radius": 2.2,
+          "intensity": 1,
+          "color": "#cfe3ff"
+        },
+        "vignette": 0.7,
+        "bloom": 0.35
+      }
+    },
+    "updatedAt": "2026-11-01T10:00:00.000Z"
+  },
+  "assets": [
+    {
+      "id": "asset.env.void",
+      "kind": "environment",
+      "name": "Cerebral void",
+      "tags": [],
+      "rigFamilies": [],
+      "locator": "builtin:void",
+      "slots": [],
+      "hides": [],
+      "params": [],
+      "license": {
+        "id": "CC0-1.0",
+        "personalUse": true,
+        "commercialUse": true,
+        "redistribution": true
+      }
+    }
+  ]
+}

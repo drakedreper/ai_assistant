@@ -1,0 +1,6 @@
+{
+  "type": "construct.terminal.resize",
+  "constructId": "construct.term",
+  "cols": 120,
+  "rows": 32
+}

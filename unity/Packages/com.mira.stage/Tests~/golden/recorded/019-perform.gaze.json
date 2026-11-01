@@ -1,0 +1,11 @@
+{
+  "id": "cmd-mvxtuh29-s-60a5",
+  "characterId": "char.assistant",
+  "type": "perform.gaze",
+  "target": {
+    "kind": "away",
+    "direction": "left"
+  },
+  "speed": 0.54,
+  "saccades": true
+}

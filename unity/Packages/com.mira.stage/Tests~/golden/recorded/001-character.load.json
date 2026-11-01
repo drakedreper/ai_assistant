@@ -1,0 +1,731 @@
+{
+  "id": "cmd-mvxtucmu-4-5b82",
+  "characterId": "char.assistant",
+  "type": "character.load",
+  "character": {
+    "id": "char.assistant",
+    "role": "assistant",
+    "name": "Mira",
+    "baseAssetId": "base.vrm1.composed",
+    "rigFamily": "vrm1",
+    "params": {
+      "face.apparent_age": 34,
+      "face.width": 0,
+      "face.jaw_definition": 0.72,
+      "face.roundness": -0.1,
+      "face.cheekbone_height": 0.15,
+      "face.brow_ridge": 0.55,
+      "face.chin_length": 0.05,
+      "eyes.size": -0.05,
+      "eyes.spacing": 0,
+      "eyes.tilt": 0.1,
+      "eyes.iris_color": "#4a5a6a",
+      "nose.bridge_height": 0.1,
+      "nose.width": 0,
+      "mouth.width": 0,
+      "mouth.lip_fullness": 0.05,
+      "body.height_cm": 177,
+      "body.head_scale": 0.96,
+      "body.leg_length": 0.3,
+      "body.shoulder_width": 0.4,
+      "body.muscle_tone": 0.6,
+      "body.waist_width": -0.05,
+      "body.hip_width": 0,
+      "body.arm_length": 0.05,
+      "body.neck_length": 0.1,
+      "skin.tone": "#c89f87",
+      "skin.freckles": 0,
+      "hair.color": "#2a1e18",
+      "hair.highlight": "#6b4a36",
+      "makeup.lip_color": "#6a2f3a",
+      "makeup.eye_definition": 0.35
+    },
+    "equipped": {
+      "hair": null,
+      "hairAccessory": null,
+      "headwear": null,
+      "glasses": null,
+      "earrings": null,
+      "neck": null,
+      "top": "outfit.crisp-shirt",
+      "bottom": "outfit.tailored-trousers",
+      "fullBody": null,
+      "outerwear": null,
+      "legwear": null,
+      "footwear": "outfit.ankle-boots",
+      "gloves": null,
+      "wristwear": null,
+      "back": null,
+      "tail": null
+    },
+    "presets": [
+      {
+        "id": "preset.work",
+        "name": "Work",
+        "equipped": {
+          "hair": null,
+          "hairAccessory": null,
+          "headwear": null,
+          "glasses": null,
+          "earrings": "accessory.simple-earrings",
+          "neck": null,
+          "top": "outfit.crisp-shirt",
+          "bottom": "outfit.tailored-trousers",
+          "fullBody": null,
+          "outerwear": null,
+          "legwear": null,
+          "footwear": "outfit.ankle-boots",
+          "gloves": null,
+          "wristwear": null,
+          "back": null,
+          "tail": null
+        },
+        "tweaks": {},
+        "context": {
+          "timeOfDay": [
+            "morning",
+            "day"
+          ],
+          "activity": [
+            "work"
+          ]
+        }
+      },
+      {
+        "id": "preset.meeting",
+        "name": "Meeting",
+        "equipped": {
+          "hair": null,
+          "hairAccessory": null,
+          "headwear": null,
+          "glasses": null,
+          "earrings": "accessory.simple-earrings",
+          "neck": null,
+          "top": "outfit.crisp-shirt",
+          "bottom": "outfit.tailored-trousers",
+          "fullBody": null,
+          "outerwear": "outfit.tailored-blazer",
+          "legwear": null,
+          "footwear": "outfit.ankle-boots",
+          "gloves": null,
+          "wristwear": null,
+          "back": null,
+          "tail": null
+        },
+        "tweaks": {},
+        "context": {
+          "activity": [
+            "meeting"
+          ]
+        }
+      },
+      {
+        "id": "preset.training",
+        "name": "Training",
+        "equipped": {
+          "hair": null,
+          "hairAccessory": null,
+          "headwear": null,
+          "glasses": null,
+          "earrings": null,
+          "neck": null,
+          "top": "outfit.training-top",
+          "bottom": "outfit.training-leggings",
+          "fullBody": null,
+          "outerwear": null,
+          "legwear": null,
+          "footwear": "outfit.ankle-boots",
+          "gloves": null,
+          "wristwear": "accessory.metal-bracers",
+          "back": null,
+          "tail": null
+        },
+        "tweaks": {},
+        "context": {
+          "timeOfDay": [
+            "morning",
+            "evening"
+          ],
+          "activity": [
+            "relax"
+          ]
+        }
+      },
+      {
+        "id": "preset.out",
+        "name": "Out",
+        "equipped": {
+          "hair": null,
+          "hairAccessory": null,
+          "headwear": null,
+          "glasses": null,
+          "earrings": null,
+          "neck": null,
+          "top": "outfit.crisp-shirt",
+          "bottom": "outfit.tailored-trousers",
+          "fullBody": null,
+          "outerwear": "outfit.structured-coat",
+          "legwear": null,
+          "footwear": "outfit.ankle-boots",
+          "gloves": "accessory.leather-gloves",
+          "wristwear": null,
+          "back": null,
+          "tail": null
+        },
+        "tweaks": {},
+        "context": {
+          "weather": [
+            "cold",
+            "snow",
+            "rain"
+          ],
+          "activity": [
+            "out"
+          ]
+        }
+      },
+      {
+        "id": "preset.evening",
+        "name": "Evening",
+        "equipped": {
+          "hair": null,
+          "hairAccessory": null,
+          "headwear": null,
+          "glasses": null,
+          "earrings": "accessory.simple-earrings",
+          "neck": null,
+          "top": null,
+          "bottom": null,
+          "fullBody": "outfit.utility-jumpsuit",
+          "outerwear": null,
+          "legwear": null,
+          "footwear": "outfit.ankle-boots",
+          "gloves": null,
+          "wristwear": "accessory.metal-bracers",
+          "back": null,
+          "tail": null
+        },
+        "tweaks": {},
+        "context": {
+          "timeOfDay": [
+            "evening",
+            "night"
+          ],
+          "activity": [
+            "relax",
+            "out"
+          ]
+        }
+      },
+      {
+        "id": "preset.restful",
+        "name": "Restful",
+        "equipped": {
+          "hair": null,
+          "hairAccessory": null,
+          "headwear": null,
+          "glasses": null,
+          "earrings": null,
+          "neck": null,
+          "top": "outfit.training-top",
+          "bottom": "outfit.training-leggings",
+          "fullBody": null,
+          "outerwear": null,
+          "legwear": null,
+          "footwear": null,
+          "gloves": null,
+          "wristwear": null,
+          "back": null,
+          "tail": null
+        },
+        "tweaks": {},
+        "context": {
+          "timeOfDay": [
+            "night"
+          ],
+          "activity": [
+            "sleep",
+            "relax"
+          ]
+        }
+      }
+    ],
+    "voice": {
+      "provider": "kokoro",
+      "voiceId": "default",
+      "speed": 1,
+      "pitchSemitones": 0
+    },
+    "presence": {
+      "uprightness": 0.8,
+      "gestureEconomy": 0.75,
+      "gazeHold": 0.8,
+      "pace": 0.65,
+      "athleticism": 0.8,
+      "baseline": {
+        "valence": 0.2,
+        "arousal": -0.1,
+        "dominance": 0.7
+      }
+    },
+    "personaId": "default",
+    "createdAt": "2026-11-01T12:49:31.155Z",
+    "updatedAt": "2026-11-01T12:49:31.155Z"
+  },
+  "assets": [
+    {
+      "id": "base.vrm1.composed",
+      "kind": "character_base",
+      "name": "Composed athletic (vrm1)",
+      "tags": [
+        "adult",
+        "athletic",
+        "composed"
+      ],
+      "rigFamilies": [
+        "vrm1"
+      ],
+      "locator": "bases/vrm1/composed.vrm",
+      "slots": [],
+      "hides": [],
+      "params": [
+        {
+          "id": "face.apparent_age",
+          "group": "face",
+          "label": "Apparent age (years)",
+          "min": 28,
+          "max": 58,
+          "default": 34,
+          "type": "scalar"
+        },
+        {
+          "id": "face.width",
+          "group": "face",
+          "label": "Face width",
+          "min": -0.5,
+          "max": 0.5,
+          "default": 0,
+          "type": "scalar"
+        },
+        {
+          "id": "face.jaw_definition",
+          "group": "face",
+          "label": "Jaw definition",
+          "min": 0.4,
+          "max": 1,
+          "default": 0.72,
+          "type": "scalar"
+        },
+        {
+          "id": "face.roundness",
+          "group": "face",
+          "label": "Face roundness",
+          "min": -0.4,
+          "max": 0.25,
+          "default": -0.1,
+          "type": "scalar"
+        },
+        {
+          "id": "face.cheekbone_height",
+          "group": "face",
+          "label": "Cheekbone height",
+          "min": -0.5,
+          "max": 0.5,
+          "default": 0.15,
+          "type": "scalar"
+        },
+        {
+          "id": "face.brow_ridge",
+          "group": "face",
+          "label": "Brow definition",
+          "min": 0.15,
+          "max": 1,
+          "default": 0.55,
+          "type": "scalar"
+        },
+        {
+          "id": "face.chin_length",
+          "group": "face",
+          "label": "Chin length",
+          "min": -0.4,
+          "max": 0.5,
+          "default": 0.05,
+          "type": "scalar"
+        },
+        {
+          "id": "eyes.size",
+          "group": "eyes",
+          "label": "Eye size",
+          "min": -0.3,
+          "max": 0.25,
+          "default": -0.05,
+          "type": "scalar"
+        },
+        {
+          "id": "eyes.spacing",
+          "group": "eyes",
+          "label": "Eye spacing",
+          "min": -0.5,
+          "max": 0.5,
+          "default": 0,
+          "type": "scalar"
+        },
+        {
+          "id": "eyes.tilt",
+          "group": "eyes",
+          "label": "Eye tilt",
+          "min": -0.5,
+          "max": 0.5,
+          "default": 0.1,
+          "type": "scalar"
+        },
+        {
+          "id": "eyes.iris_color",
+          "group": "eyes",
+          "label": "Iris colour",
+          "min": 0,
+          "max": 16777215,
+          "default": 4872810,
+          "type": "color"
+        },
+        {
+          "id": "nose.bridge_height",
+          "group": "nose",
+          "label": "Nose bridge height",
+          "min": -0.5,
+          "max": 0.5,
+          "default": 0.1,
+          "type": "scalar"
+        },
+        {
+          "id": "nose.width",
+          "group": "nose",
+          "label": "Nose width",
+          "min": -0.5,
+          "max": 0.5,
+          "default": 0,
+          "type": "scalar"
+        },
+        {
+          "id": "mouth.width",
+          "group": "mouth",
+          "label": "Mouth width",
+          "min": -0.5,
+          "max": 0.5,
+          "default": 0,
+          "type": "scalar"
+        },
+        {
+          "id": "mouth.lip_fullness",
+          "group": "mouth",
+          "label": "Lip fullness",
+          "min": -0.5,
+          "max": 0.6,
+          "default": 0.05,
+          "type": "scalar"
+        },
+        {
+          "id": "body.height_cm",
+          "group": "body",
+          "label": "Height (cm)",
+          "min": 162,
+          "max": 190,
+          "default": 177,
+          "type": "scalar"
+        },
+        {
+          "id": "body.head_scale",
+          "group": "body",
+          "label": "Head scale",
+          "min": 0.92,
+          "max": 0.99,
+          "default": 0.96,
+          "type": "scalar"
+        },
+        {
+          "id": "body.leg_length",
+          "group": "body",
+          "label": "Leg length",
+          "min": 0,
+          "max": 0.7,
+          "default": 0.3,
+          "type": "scalar"
+        },
+        {
+          "id": "body.shoulder_width",
+          "group": "body",
+          "label": "Shoulder width",
+          "min": -0.1,
+          "max": 0.7,
+          "default": 0.4,
+          "type": "scalar"
+        },
+        {
+          "id": "body.muscle_tone",
+          "group": "body",
+          "label": "Muscle tone",
+          "min": 0,
+          "max": 1,
+          "default": 0.6,
+          "type": "scalar"
+        },
+        {
+          "id": "body.waist_width",
+          "group": "body",
+          "label": "Waist width",
+          "min": -0.5,
+          "max": 0.5,
+          "default": -0.05,
+          "type": "scalar"
+        },
+        {
+          "id": "body.hip_width",
+          "group": "body",
+          "label": "Hip width",
+          "min": -0.5,
+          "max": 0.5,
+          "default": 0,
+          "type": "scalar"
+        },
+        {
+          "id": "body.arm_length",
+          "group": "body",
+          "label": "Arm length",
+          "min": -0.4,
+          "max": 0.5,
+          "default": 0.05,
+          "type": "scalar"
+        },
+        {
+          "id": "body.neck_length",
+          "group": "body",
+          "label": "Neck length",
+          "min": -0.4,
+          "max": 0.5,
+          "default": 0.1,
+          "type": "scalar"
+        },
+        {
+          "id": "skin.tone",
+          "group": "skin",
+          "label": "Skin tone",
+          "min": 0,
+          "max": 16777215,
+          "default": 13148039,
+          "type": "color"
+        },
+        {
+          "id": "skin.freckles",
+          "group": "skin",
+          "label": "Freckles",
+          "min": 0,
+          "max": 0.6,
+          "default": 0,
+          "type": "scalar"
+        },
+        {
+          "id": "hair.color",
+          "group": "hair",
+          "label": "Hair colour",
+          "min": 0,
+          "max": 16777215,
+          "default": 2760216,
+          "type": "color"
+        },
+        {
+          "id": "hair.highlight",
+          "group": "hair",
+          "label": "Hair highlight",
+          "min": 0,
+          "max": 16777215,
+          "default": 7031350,
+          "type": "color"
+        },
+        {
+          "id": "makeup.lip_color",
+          "group": "makeup",
+          "label": "Lip colour",
+          "min": 0,
+          "max": 16777215,
+          "default": 6958906,
+          "type": "color"
+        },
+        {
+          "id": "makeup.eye_definition",
+          "group": "makeup",
+          "label": "Eye definition",
+          "min": 0,
+          "max": 1,
+          "default": 0.35,
+          "type": "scalar"
+        }
+      ],
+      "license": {
+        "id": "first-party-placeholder",
+        "source": "project seed metadata",
+        "personalUse": true,
+        "commercialUse": true,
+        "redistribution": true,
+        "adultExpression": false,
+        "notes": "Seed metadata only, no binary ships. A real asset must carry its own licence record."
+      }
+    },
+    {
+      "id": "outfit.ankle-boots",
+      "kind": "outfit",
+      "name": "Ankle boots",
+      "tags": [
+        "boots",
+        "dark",
+        "baseline"
+      ],
+      "rigFamilies": [
+        "vrm1",
+        "metahuman",
+        "cc5"
+      ],
+      "locator": "wardrobe/ankle-boots",
+      "slots": [
+        "footwear"
+      ],
+      "hides": [
+        "feet"
+      ],
+      "params": [
+        {
+          "id": "color",
+          "group": "other",
+          "label": "Colour",
+          "min": 0,
+          "max": 16777215,
+          "default": 1382172,
+          "type": "color"
+        },
+        {
+          "id": "fit",
+          "group": "other",
+          "label": "Fit",
+          "min": -0.3,
+          "max": 0.3,
+          "default": 0,
+          "type": "scalar"
+        }
+      ],
+      "license": {
+        "id": "first-party-placeholder",
+        "source": "project seed metadata",
+        "personalUse": true,
+        "commercialUse": true,
+        "redistribution": true,
+        "adultExpression": false,
+        "notes": "Seed metadata only, no binary ships. A real asset must carry its own licence record."
+      }
+    },
+    {
+      "id": "outfit.crisp-shirt",
+      "kind": "outfit",
+      "name": "Crisp shirt",
+      "tags": [
+        "tailored",
+        "shirt",
+        "work",
+        "baseline"
+      ],
+      "rigFamilies": [
+        "vrm1",
+        "metahuman",
+        "cc5"
+      ],
+      "locator": "wardrobe/crisp-shirt",
+      "slots": [
+        "top"
+      ],
+      "hides": [
+        "torso",
+        "arms",
+        "neck"
+      ],
+      "params": [
+        {
+          "id": "color",
+          "group": "other",
+          "label": "Colour",
+          "min": 0,
+          "max": 16777215,
+          "default": 14278118,
+          "type": "color"
+        },
+        {
+          "id": "fit",
+          "group": "other",
+          "label": "Fit",
+          "min": -0.3,
+          "max": 0.3,
+          "default": 0,
+          "type": "scalar"
+        }
+      ],
+      "license": {
+        "id": "first-party-placeholder",
+        "source": "project seed metadata",
+        "personalUse": true,
+        "commercialUse": true,
+        "redistribution": true,
+        "adultExpression": false,
+        "notes": "Seed metadata only, no binary ships. A real asset must carry its own licence record."
+      }
+    },
+    {
+      "id": "outfit.tailored-trousers",
+      "kind": "outfit",
+      "name": "Tailored trousers",
+      "tags": [
+        "tailored",
+        "dark",
+        "work",
+        "baseline"
+      ],
+      "rigFamilies": [
+        "vrm1",
+        "metahuman",
+        "cc5"
+      ],
+      "locator": "wardrobe/tailored-trousers",
+      "slots": [
+        "bottom"
+      ],
+      "hides": [
+        "legs"
+      ],
+      "params": [
+        {
+          "id": "color",
+          "group": "other",
+          "label": "Colour",
+          "min": 0,
+          "max": 16777215,
+          "default": 1711657,
+          "type": "color"
+        },
+        {
+          "id": "fit",
+          "group": "other",
+          "label": "Fit",
+          "min": -0.3,
+          "max": 0.3,
+          "default": 0,
+          "type": "scalar"
+        }
+      ],
+      "license": {
+        "id": "first-party-placeholder",
+        "source": "project seed metadata",
+        "personalUse": true,
+        "commercialUse": true,
+        "redistribution": true,
+        "adultExpression": false,
+        "notes": "Seed metadata only, no binary ships. A real asset must carry its own licence record."
+      }
+    }
+  ]
+}

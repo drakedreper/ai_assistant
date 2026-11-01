@@ -1,0 +1,5 @@
+{
+  "type": "asset.failed",
+  "assetId": "asset.base.vrm",
+  "reason": "file not found"
+}

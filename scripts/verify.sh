@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # One command that checks everything, and prints a short table instead of pages of output.
 #
-#   scripts/verify.sh          full run (about 6 minutes): typecheck, every unit suite, the web build, the mockup smoke test,
+#   scripts/verify.sh          full run (about 6 minutes): typecheck, every unit suite, the C# stage client (when dotnet is installed),
+#                              the web build, the mockup smoke test,
 #                              the three end-to-end scripts (real daemon processes, real Chromium), orphaned terminal hosts
-#   scripts/verify.sh quick    typecheck and the unit suites only (about 1 minute)
+#   scripts/verify.sh quick    typecheck and the unit suites (and the C# client when dotnet is installed) only (about 1 to 2 minutes)
 #
 # Details go to .verify.log (git-ignored). Linux, macOS or Git Bash. The end-to-end scripts need Playwright's Chromium
 # (npx playwright install chromium) and are run one at a time on purpose: they start daemons on random ports.
@@ -42,6 +43,16 @@ run unit pnpm test
 # per-package test counts, from the log
 UNIT=$(grep -E 'test: +Tests +[0-9]+ passed' "$LOG" | sed -E 's/.*Tests +([0-9]+) passed.*/\1/' | awk '{s+=$1; n=n" "$1} END{print s" (" n " )"}')
 row "  unit tests" "$UNIT"
+
+# the C# stage client for Unity (unity/Packages/com.mira.stage): needs the .NET 8 SDK, and node for its live tests, which
+# start the real daemon; skipped, not failed, on a machine without dotnet
+if command -v dotnet > /dev/null 2>&1; then
+  run unity-stage dotnet test unity/Packages/com.mira.stage/Tests~/Tests/Mira.Stage.Tests.csproj -nologo -v q
+  CS=$(grep -E '(Passed|Failed)! ' "$LOG" | tail -1 | sed -E 's/.*Total: *([0-9]+).*/\1/')
+  row "  c# tests" "${CS:-?}"
+else
+  row "unity-stage" "SKIP (no dotnet SDK: the C# client tests did not run)"
+fi
 
 if [ "$MODE" != "quick" ]; then
   run build pnpm --filter @ai-assistant/web build

@@ -9,6 +9,10 @@ desktop.ini
 *.swp
 *.swo
 *~
+# ...but Unity skips package folders that end in "~" (Tests~, Samples~) on import, and we commit those on purpose
+!Tests~/
+!Samples~/
+!Documentation~/
 
 # Environment and secrets
 .env

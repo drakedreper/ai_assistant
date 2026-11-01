@@ -1,0 +1,211 @@
+{
+  "id": "cmd-mvxtucmz-6-0bc5",
+  "type": "scene.load",
+  "scene": {
+    "id": "scene.main",
+    "name": "Cerebral void",
+    "environmentAssetId": "env.cerebral-void",
+    "objects": [],
+    "constructs": [],
+    "cameras": [
+      {
+        "id": "wide",
+        "name": "Wide",
+        "transform": {
+          "position": [
+            0,
+            1.5,
+            6.2
+          ],
+          "rotation": [
+            -0.04022,
+            0,
+            0,
+            0.99919
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "fovDeg": 38,
+        "follow": "none",
+        "depthOfField": 0.05
+      },
+      {
+        "id": "medium",
+        "name": "Medium",
+        "transform": {
+          "position": [
+            0,
+            1.45,
+            2.7
+          ],
+          "rotation": [
+            -0.02405,
+            0,
+            0,
+            0.99971
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "fovDeg": 34,
+        "follow": "body",
+        "depthOfField": 0.25
+      },
+      {
+        "id": "closeup",
+        "name": "Close-up",
+        "transform": {
+          "position": [
+            0,
+            1.62,
+            1.15
+          ],
+          "rotation": [
+            -0.01738,
+            0,
+            0,
+            0.99985
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "fovDeg": 28,
+        "follow": "face",
+        "depthOfField": 0.55
+      },
+      {
+        "id": "profile",
+        "name": "Profile",
+        "transform": {
+          "position": [
+            2.6,
+            1.45,
+            0.1
+          ],
+          "rotation": [
+            -0.01384,
+            0.69326,
+            0.01332,
+            0.72043
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "fovDeg": 32,
+        "follow": "head",
+        "depthOfField": 0.3
+      },
+      {
+        "id": "back",
+        "name": "Back",
+        "transform": {
+          "position": [
+            0,
+            1.5,
+            -3.8
+          ],
+          "rotation": [
+            0,
+            0.99922,
+            0.03938,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "fovDeg": 36,
+        "follow": "none",
+        "depthOfField": 0.15
+      },
+      {
+        "id": "over_shoulder",
+        "name": "Over the shoulder",
+        "transform": {
+          "position": [
+            0.55,
+            1.75,
+            -1.1
+          ],
+          "rotation": [
+            -0.00329,
+            0.99608,
+            0.0421,
+            0.07779
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "fovDeg": 40,
+        "follow": "none",
+        "depthOfField": 0.4
+      }
+    ],
+    "activeCameraId": "wide",
+    "lighting": {
+      "id": "void",
+      "name": "Cerebral void",
+      "mode": "fixed",
+      "look": "void",
+      "atmosphere": {
+        "ground": "void",
+        "fogColor": "#0a1a3a",
+        "fogDensity": 0.55,
+        "volumetrics": true,
+        "dustMotes": 0.35,
+        "floorPool": {
+          "radius": 2.2,
+          "intensity": 1,
+          "color": "#cfe3ff"
+        },
+        "vignette": 0.7,
+        "bloom": 0.35
+      }
+    },
+    "updatedAt": "2026-11-01T12:49:31.163Z"
+  },
+  "assets": [
+    {
+      "id": "env.cerebral-void",
+      "kind": "environment",
+      "name": "Cerebral void",
+      "tags": [
+        "void",
+        "dark",
+        "default"
+      ],
+      "rigFamilies": [],
+      "locator": "environments/cerebral-void",
+      "slots": [],
+      "hides": [],
+      "params": [],
+      "license": {
+        "id": "first-party-placeholder",
+        "source": "project seed metadata",
+        "personalUse": true,
+        "commercialUse": true,
+        "redistribution": true,
+        "adultExpression": false,
+        "notes": "Seed metadata only, no binary ships. A real asset must carry its own licence record."
+      }
+    }
+  ]
+}

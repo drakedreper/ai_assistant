@@ -1,0 +1,37 @@
+[
+  {
+    "file": "011-audio.b64",
+    "kind": "audio",
+    "utteranceIdHash": 596015224,
+    "tStartMs": 2634,
+    "bytes": 973
+  },
+  {
+    "file": "012-face.b64",
+    "kind": "face",
+    "utteranceIdHash": 596015224,
+    "tStartMs": 2634,
+    "bytes": 221
+  },
+  {
+    "file": "013-audio.b64",
+    "kind": "audio",
+    "utteranceIdHash": 596015224,
+    "tStartMs": 2654,
+    "bytes": 973
+  },
+  {
+    "file": "014-face.b64",
+    "kind": "face",
+    "utteranceIdHash": 596015224,
+    "tStartMs": 2667.3333333333335,
+    "bytes": 221
+  },
+  {
+    "file": "015-audio.b64",
+    "kind": "audio",
+    "utteranceIdHash": 596015224,
+    "tStartMs": 2674,
+    "bytes": 973
+  }
+]

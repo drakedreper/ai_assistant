@@ -1,0 +1,6 @@
+{
+  "id": "cmd-010",
+  "type": "scene.camera",
+  "cameraId": "closeup",
+  "blendMs": 600
+}

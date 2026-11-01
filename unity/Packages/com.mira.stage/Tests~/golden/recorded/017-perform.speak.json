@@ -1,0 +1,22 @@
+{
+  "id": "cmd-mvxtuel8-q-fd3a",
+  "atMs": 4074,
+  "type": "perform.speak",
+  "utteranceId": "utt-mvxtuekq-n-c85d",
+  "text": "Sun 01 Nov 08:30-09:00 Morning planning with Mira (personal).",
+  "emotion": "happy",
+  "emotionTimeline": [
+    {
+      "tMs": 0,
+      "emotion": "happy",
+      "intensity": 0.7
+    }
+  ],
+  "audio": {
+    "format": "pcm_s16le",
+    "sampleRate": 24000,
+    "channels": 1,
+    "totalMs": 758
+  },
+  "faceSource": "backend"
+}

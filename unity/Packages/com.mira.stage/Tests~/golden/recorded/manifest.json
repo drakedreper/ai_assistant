@@ -1,0 +1,46 @@
+{
+  "recordedAt": "2026-11-01T12:49:40.777Z",
+  "protocol": "mira-stage/1",
+  "capabilitiesSent": {
+    "engine": "unity",
+    "engineVersion": "6000.0.0f1",
+    "rigFamilies": [
+      "vrm1"
+    ],
+    "face": {
+      "arkit52": true,
+      "visemes": false,
+      "audioToFaceOnStage": false
+    },
+    "render": {
+      "strandHair": false,
+      "clothSim": false,
+      "runtimeAssetLoading": true,
+      "embeddedStream": false
+    },
+    "tracking": {
+      "face": false,
+      "body": false
+    },
+    "constructs": [],
+    "maxCharacters": 2
+  },
+  "commands": [
+    "001-character.load.json",
+    "002-character.load.json",
+    "003-scene.load.json",
+    "004-perform.affect.json",
+    "005-perform.idle.json",
+    "006-perform.posture.json",
+    "007-perform.gaze.json",
+    "008-perform.gesture.json",
+    "009-perform.affect.json",
+    "010-perform.speak.json",
+    "016-perform.speak.json",
+    "017-perform.speak.json",
+    "018-perform.speak.json",
+    "019-perform.gaze.json",
+    "020-scene.camera.json",
+    "021-perform.gaze.json"
+  ]
+}

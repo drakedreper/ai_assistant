@@ -1,0 +1,15 @@
+{
+  "id": "cmd-008",
+  "type": "scene.data",
+  "constructId": "construct.brain",
+  "mode": "merge",
+  "nodes": [
+    {
+      "id": "n1",
+      "label": "Strategy",
+      "layer": "strategy",
+      "importance": 4
+    }
+  ],
+  "edges": []
+}

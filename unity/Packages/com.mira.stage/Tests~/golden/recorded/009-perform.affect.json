@@ -1,0 +1,12 @@
+{
+  "id": "cmd-mvxtucn8-c-e5bc",
+  "characterId": "char.assistant",
+  "type": "perform.affect",
+  "affect": {
+    "valence": 0.2,
+    "arousal": -0.1,
+    "dominance": 0.7,
+    "label": "neutral"
+  },
+  "blendMs": 790
+}

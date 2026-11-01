@@ -1,0 +1,22 @@
+{
+  "id": "cmd-mvxtuf74-r-33c9",
+  "atMs": 4972,
+  "type": "perform.speak",
+  "utteranceId": "utt-mvxtuekv-o-3805",
+  "text": "Sun 01 Nov 09:30-11:30 Deep work: Atlas beta (focus)",
+  "emotion": "happy",
+  "emotionTimeline": [
+    {
+      "tMs": 0,
+      "emotion": "happy",
+      "intensity": 0.7
+    }
+  ],
+  "audio": {
+    "format": "pcm_s16le",
+    "sampleRate": 24000,
+    "channels": 1,
+    "totalMs": 596
+  },
+  "faceSource": "backend"
+}

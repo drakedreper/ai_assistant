@@ -1,0 +1,6 @@
+{
+  "id": "cmd-019",
+  "type": "perform.interact",
+  "objectId": "obj.chair",
+  "action": "sit"
+}

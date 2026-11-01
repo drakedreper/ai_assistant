@@ -1,0 +1,10 @@
+{
+  "id": "cmd-mvxtucn6-a-a07f",
+  "characterId": "char.assistant",
+  "type": "perform.gaze",
+  "target": {
+    "kind": "user"
+  },
+  "speed": 0.54,
+  "saccades": true
+}

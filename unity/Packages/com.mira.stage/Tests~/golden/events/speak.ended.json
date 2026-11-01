@@ -1,0 +1,6 @@
+{
+  "type": "speak.ended",
+  "utteranceId": "utt-0001",
+  "stageMs": 3200,
+  "interrupted": false
+}

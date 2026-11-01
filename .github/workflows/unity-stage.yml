@@ -1,0 +1,63 @@
+# Runs the C# stage client for Unity (unity/Packages/com.mira.stage) on a clean Linux machine: its xunit tests, including the
+# live ones that start the REAL daemon and connect to it over a real WebSocket, plus the TypeScript halves of the shared
+# fixtures. The development sandbox has no Unity and the owner's PC is not reachable, so this is the second place (after the
+# sandbox) where the Unity-facing contract is checked from a clean checkout. It does NOT build or run Unity.
+# Pushes to the working branch only, or by hand.
+name: unity-stage
+
+on:
+  push:
+    branches: [claude/determined-pasteur-klc0fw]
+    paths:
+      - 'unity/**'
+      - 'packages/shared/src/stage.ts'
+      - 'packages/stage-core/**'
+      - 'apps/daemon/**'
+      - 'scripts/record-stage-golden.ts'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - '.github/workflows/unity-stage.yml'
+  workflow_dispatch:
+
+# One group per commit, so re-running an old run cannot cancel a newer commit's run.
+concurrency:
+  group: unity-stage-${{ github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  csharp:
+    name: the C# stage client against the real daemon (Linux, .NET 8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # The live tests start the real daemon (node --import tsx src/main.ts), so the full install is needed, native addons included.
+      - name: Install the repository's JavaScript
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      # None of the tests may be skipped: a live test skips itself when node or the daemon's dependencies are missing, and
+      # on this machine that would mean the job proved nothing.
+      - name: The C# tests (the live ones start the daemon for real)
+        run: |
+          dotnet test unity/Packages/com.mira.stage/Tests~/Tests/Mira.Stage.Tests.csproj -nologo -v q 2>&1 | tee csharp.log
+          grep -E 'Passed! .*Skipped: +0,' csharp.log
+
+      - name: The TypeScript side of the same fixtures
+        run: |
+          pnpm --filter @ai-assistant/daemon exec vitest run test/stage.golden.test.ts
+          pnpm --filter @ai-assistant/stage-core exec vitest run test/locator.golden.test.ts

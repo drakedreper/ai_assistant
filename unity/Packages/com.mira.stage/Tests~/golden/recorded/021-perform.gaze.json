@@ -1,0 +1,10 @@
+{
+  "id": "cmd-mvxtuhlt-u-cdb9",
+  "characterId": "char.assistant",
+  "type": "perform.gaze",
+  "target": {
+    "kind": "user"
+  },
+  "speed": 0.54,
+  "saccades": true
+}
