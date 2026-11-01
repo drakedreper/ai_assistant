@@ -18,8 +18,10 @@ on:
       - '.github/workflows/windows.yml'
   workflow_dispatch:
 
+# One group per commit: a second attempt of the same commit replaces the first, but re-running an older run (the
+# "Re-run" button) can no longer cancel the run of a newer commit.
 concurrency:
-  group: windows-${{ github.ref }}
+  group: windows-${{ github.sha }}
   cancel-in-progress: true
 
 permissions:
