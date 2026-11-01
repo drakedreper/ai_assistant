@@ -5,15 +5,18 @@ bin/
 obj/
 TestResults/
 
-# Unity's own folders, in a Unity project made under unity/ (unity projects create ...)
-[Ll]ibrary/
-[Tt]emp/
-[Ll]ogs/
-[Uu]ser[Ss]ettings/
-[Bb]uild/
-[Bb]uilds/
-[Mm]emoryCaptures/
-[Rr]ecordings/
+# Unity's own folders, at the root of a Unity project made under unity/ (unity projects create MiraStage --path unity makes
+# unity/MiraStage/). Anchored one level down on purpose: a SOURCE folder called Build or Logs deeper in must never be ignored.
+/*/[Ll]ibrary/
+/*/[Tt]emp/
+/*/[Ll]ogs/
+/*/[Uu]ser[Ss]ettings/
+/*/[Bb]uild/
+/*/[Bb]uilds/
+/*/[Mm]emoryCaptures/
+/*/[Rr]ecordings/
+
+# editor folders
 .vs/
 .idea/
 .vscode/

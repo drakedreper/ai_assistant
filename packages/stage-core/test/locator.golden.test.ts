@@ -263,7 +263,8 @@ describe('the locator corpus the C# port is checked against (golden/locators.jso
     let bad = 0
     for (let i = 0; i < text.length; i++) {
       const code = text.charCodeAt(i)
-      if (code !== 10 && (code < 32 || code > 126)) bad++
+      // a line feed, or a carriage return (git on Windows checks text files out with CRLF under core.autocrlf)
+      if (code !== 10 && code !== 13 && (code < 32 || code > 126)) bad++
     }
     expect(bad).toBe(0)
     expect(text.length).toBeGreaterThan(100_000)

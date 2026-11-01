@@ -7,3 +7,5 @@ Dockerfile text eol=lf
 .dockerignore text eol=lf
 docker-compose.yml text eol=lf
 *.ps1 text eol=crlf
+# The fixtures shared by the TypeScript and C# tests stay byte-identical on every platform.
+unity/Packages/com.mira.stage/Tests~/golden/** text eol=lf

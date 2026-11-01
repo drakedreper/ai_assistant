@@ -31,6 +31,10 @@ The daemon prints a one-time sign-in link (`http://127.0.0.1:7421/?code=...`); o
 
 With Docker Desktop running, double-click `start-docker.cmd` (macOS, Linux, Git Bash: `scripts/start-docker.sh`). It builds the image, starts the daemon and the built web app in a container, and opens the sign-in link. Unity and the browser stay on your PC and use the published port, which is bound to `127.0.0.1` only. What differs from the native run (terminals, Claude login) is in [docs/DOCKER.md](docs/DOCKER.md).
 
+### Unity (the first engine stage)
+
+The 3D room and character are built in Unity 6 (VRM 1.0), which runs on your PC and connects to the same backend, native or in Docker. What is ready is the C# client and its tests; the Unity project itself is built on the PC by a Claude Code session started from [spikes/unity/KICKOFF-PROMPT.md](spikes/unity/KICKOFF-PROMPT.md). What exists, what is tested and what is not: [docs/UNITY.md](docs/UNITY.md).
+
 ## Scripts
 
 | Command | What it does |
@@ -38,13 +42,14 @@ With Docker Desktop running, double-click `start-docker.cmd` (macOS, Linux, Git 
 | `pnpm dev` | Vite dev server for `apps/web` on 127.0.0.1:5173 |
 | `pnpm typecheck` | `tsc` in every workspace package |
 | `pnpm test` | Vitest in `packages/shared` (contracts), `packages/agent-core` (lane, backends, parser), `packages/stage-core` (stage backend and conformance suite) and `apps/daemon` (security, hooks, store, WebSocket, terminal, stage) |
-| `scripts/verify.sh` | Everything in one command: typecheck, unit tests, build, mockup smoke test, the three end-to-end scripts and an orphan-process check, printed as a short table (`scripts/verify.sh quick` skips the browser parts) |
+| `scripts/verify.sh` | Everything in one command: typecheck, unit tests, the C# stage client (when the .NET 8 SDK is installed), build, mockup smoke test, the three end-to-end scripts and an orphan-process check, printed as a short table (`scripts/verify.sh quick` skips the browser parts) |
 | `start.cmd` / `scripts/start.sh` | Run the app from a clone in one step: install, build the web app, start the daemon (fake Claude), open the sign-in link in your browser (`OPEN_BROWSER=0` skips that) |
 | `start-docker.cmd` / `scripts/start-docker.sh` | The same backend in a Docker container (`docker-compose.yml`, published on 127.0.0.1 only), with the sign-in link opened for you. [docs/DOCKER.md](docs/DOCKER.md) |
 | `pnpm --filter @ai-assistant/daemon exec tsx ../../scripts/docker-smoke.ts` | Checks a running compose stack from the host: port on 127.0.0.1 only, sign-in, a stage connecting over the published port, the token and data surviving a restart |
 | `pnpm --filter @ai-assistant/web e2e` | End-to-end: a real daemon process and a real browser (sign-in, live hooks, chat, approvals, reconnect, restart) |
 | `node apps/web/scripts/e2e-terminal.mjs` | End-to-end for the embedded terminal (gate, real PTY, reattach, tickets, cross-origin refusals, process cleanup) |
 | `node apps/web/scripts/e2e-stage.mjs` | End-to-end for the stage backend with the simulator stage over the stage socket (outfit, speech frames, camera, refusals, restart resume, inspecting and forgetting what she remembers) |
+| `dotnet test unity/Packages/com.mira.stage/Tests~/Tests/Mira.Stage.Tests.csproj` | The C# stage client for Unity against golden fixtures and the real daemon process (needs the .NET 8 SDK, node and `pnpm install`) |
 | `pnpm build` | Typecheck and production build of `apps/web` into `apps/web/dist` |
 | `pnpm --filter @ai-assistant/web preview` | Serve the production build on 127.0.0.1:4173 |
 | `node apps/web/scripts/smoke.mjs` | Playwright smoke test through every screen (needs Playwright with Chromium; see the header of the script) |

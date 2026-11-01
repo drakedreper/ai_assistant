@@ -22,7 +22,7 @@ Verified in the Linux sandbox (and again by [`.github/workflows/unity-stage.yml`
 
 | | how |
 |---|---|
-| The C# client speaks the protocol: handshake, every command, every event, binary audio and face frames, reconnect with backoff | 165 xunit tests (`dotnet test`, .NET 8) over golden JSON for every one of the 19 commands and 15 events, plus traffic recorded from the real daemon |
+| The C# client speaks the protocol: handshake, every command, every event, binary audio and face frames, reconnect with backoff | xunit tests (`dotnet test`, .NET 8; 165 in all across the rows of this table) over golden JSON for every one of the 19 commands and 15 events, plus traffic recorded from the real daemon |
 | The C# client works against the real daemon process (not a mock) | 4 live tests: look delivered (two characters, the void), a chat answered with audio and face frames, 401 wrong token, 409 second stage, 403 stage off, reconnect after a daemon restart |
 | The C# and TypeScript sides agree on constants, the ARKit order, the wardrobe slots | `golden/constants.json`, checked from both sides |
 | The locator rules (what a manifest may point at) are the daemon's rules | C# port of `validateLocator` replayed against 3,069 cases produced by the TypeScript one |
@@ -84,6 +84,11 @@ The daemon sends 52 ARKit weights per 30 fps frame (one clock, audio first). A V
 
 Unity runs on the PC only. The cloud session this repository is developed in cannot reach that PC or Unity's downloads, so the Unity project is built by a Claude Code session on the PC, driven by [spikes/unity/KICKOFF-PROMPT.md](../spikes/unity/KICKOFF-PROMPT.md). That session can use the Unity CLI (`unity`, install editors, create the project, `unity build --execute-method Builder.PerformBuild`, `unity test`) and, once the `com.unity.pipeline` package is installed in the project, drive the open Editor live (`unity status`, `unity command`). A headless CI build later needs a Unity service account in repository secrets; it is not set up.
 
+Two ways to start that session:
+
+1. Paste the prompt into Claude Code on the PC (steps at the top of the kickoff file). Ready now.
+2. Zero paste: in the Claude desktop app on the PC, enable Remote Control for the repository folder (Settings, Claude Code, Remote Control; or run `claude remote-control` in a terminal in that folder). The cloud session can then ask to work in that folder and run the same steps there, including the Unity CLI, while you approve the prompts. When this was written no PC folder was shared (the cloud session listed none), so this route needs that one setting first, and it has not been tried with Unity.
+
 ## Running the checks
 
 ```bash
@@ -111,4 +116,5 @@ The gates proposed in ADR 0008, measured on the RTX 5070 Ti with one character a
 - No render streaming into the dashboard: Unity Render Streaming has stalled, so Unity runs in its own window and the browser room stays the draft stage.
 - The daemon has no TTS or face provider beyond deterministic fakes, so the voice is a tone and the mouth follows its loudness.
 - Locators for hair, wardrobe and props have no extension; the probing rule is a decision for the Unity layer.
+- No tool yet reads a VRM's own metadata (name, licence, permitted uses in its `VRMC_vrm` block) and turns it into a catalog entry. The two seeded bases work by placing files at their locators; registering a different model properly (its own licence in its entry, through `POST /api/stage/assets`) is the next backend step once a real model is in use.
 - The locator port relies on `string.Normalize` (NFKC). It is exercised on .NET 8 with ICU; Unity's runtime has to be checked by an EditMode test that replays `golden/locators.json` (the kickoff asks for it).
