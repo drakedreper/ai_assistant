@@ -1,6 +1,6 @@
 # PC bring-up (Windows 11, RTX 5070 Ti)
 
-Status: optional, updated 2026-11-01. Nothing the project needs next depends on it, and nothing in this document has been run on the PC yet.
+Status: optional, updated 2026-11-01. Nothing the project needs next depends on it. Nothing in this document has been run on the owner's PC yet; much of it has run on a GitHub Actions Windows machine, see "Measured on a Windows runner" below.
 
 ## Quick start on Windows (5 minutes, optional, no GPU)
 
@@ -10,13 +10,33 @@ Only if you want to see the real thing run. You need Node.js 22.14 or newer and 
 git clone --branch claude/determined-pasteur-klc0fw https://github.com/drakedreper/ai_assistant.git
 ```
 
-Then double-click `start.cmd` in the new folder (macOS, Linux and Git Bash: `scripts/start.sh`). It installs, checks the database library, builds the web app, starts the daemon and opens the app in your browser. Settings, Stage shows her and the void; Settings, Privacy, "Embedded terminals" turns the terminal on; Work, Terminal opens a shell. Everything runs with the fake Claude (no network, no tokens) until you set `CLAUDE_BACKEND=sdk`. If something fails the window stays open: the exact error text is all that is needed. `scripts/start.sh` is tested end to end. `start.cmd` runs the same steps; its first run on a real PC stopped at `pnpm install` (pnpm tried to compile better-sqlite3 with node-gyp; fixed, see Risks below), and nothing after that step has run on Windows yet.
+Then double-click `start.cmd` in the new folder (macOS, Linux and Git Bash: `scripts/start.sh`). It installs, checks the database library, builds the web app, starts the daemon and opens the app in your browser. Settings, Stage shows her and the void; Settings, Privacy, "Embedded terminals" turns the terminal on; Work, Terminal opens a shell. Everything runs with the fake Claude (no network, no tokens) until you set `CLAUDE_BACKEND=sdk`. If something fails the window stays open: the exact error text is all that is needed. `scripts/start.sh` is tested end to end. `start.cmd` runs the same steps. Its first run on the owner's PC stopped at `pnpm install` (pnpm tried to compile better-sqlite3 with node-gyp; fixed, see Risks below). Since then it has run end to end on a GitHub Actions Windows machine (next section); it has not been run on the owner's PC since the fix. Set `OPEN_BROWSER=0` first if you do not want the browser opened.
 
 By hand the steps are `pnpm install`, then `pnpm --filter @ai-assistant/web build` (without it the daemon says "Web UI not built"), then `pnpm --filter @ai-assistant/daemon start` and open the link it prints. The deeper terminal checks are below (T1 to T8). The GPU, voice, camera and engine checks are parked in [spikes/pc/PARKED.md](../spikes/pc/PARKED.md) until the voice milestone or an engine decision.
 
+## Measured on a Windows runner
+
+Not the owner's PC: a GitHub Actions `windows-latest` machine (Windows Server 2025 Datacenter, Node 22.14.0, Git for Windows with `core.autocrlf=true`, no pnpm installed beforehand, no interactive desktop), driven by `.github/workflows/windows.yml` on pushes to the working branch. Runs: [launcher and typecheck](https://github.com/drakedreper/ai_assistant/actions/runs/41303153541), [everything below](https://github.com/drakedreper/ai_assistant/actions/runs/41303802870) (2026-11-01). It is evidence about Windows, not about the owner's machine.
+
+| Check | Result |
+|---|---|
+| `start.cmd` run the way a double-click runs it | **Passed.** It enabled pnpm itself; `pnpm install` took 12.8 s with no compiler (better-sqlite3 not built, node-pty found `prebuilds/win32-x64` and skipped node-gyp); the preflight printed `Database library OK: SQLite 3.53.4 (Node 22.14.0, win32 x64)`; the web app built in 1.6 s; the daemon started; the sign-in code exchange gave 200, `/api/snapshot` 200 (157,115 characters) and `/` served the built app |
+| Browser opening (`OPEN_BROWSER=1`, the default) | Edge was started with the sign-in link (first run). It used the one-time code before the check could, which is why the workflow now sets `OPEN_BROWSER=0` |
+| `pnpm -r typecheck` | **Passed**, all five projects |
+| Unit tests: shared, agent-core | **Passed** |
+| Unit tests: stage-core | 1,399 of 1,400 pass. The failure is a timeout, not an assertion: the 400-iteration property test in `wardrobe.hardening.test.ts` ("many runs of random catalog damage then restore") exceeded the 5 s default on the slower machine |
+| Unit tests: daemon | **506 failures in 22 files, not product bugs as far as seen.** The first failure, and the only error text read, is the same in every sampled test: the test harness (`test/helpers.ts`, `testConfig`) pretends the platform is `linux`, so `config.ts` resolves the temporary data directory with POSIX path rules and `C:\Users\...\Temp\daemon-test-x` becomes `D:\a\...\apps\daemon\C:\Users\...` (ENOENT in `writeSecretsFile`). The real daemon uses its real platform and ran fine in the launcher check. Whether other causes hide behind this one is not known |
+| smoke (Chromium 153, Playwright 1.63.0) | **26 of 26** |
+| e2e-daemon | **37 of 37** (sign-in, cookie, WebSocket, memory panel in a real browser) |
+| e2e-terminal | 31 passed, 5 not run on Windows by design (see "What the end-to-end scripts skip on Windows" below), **5 failed**: "New shell opens a terminal and connects", "Open Claude here starts in the project folder", the environment-scrub check (timed out waiting for `NODE_PATH` in the shell), the OSC 8 link confirmation (0 dialogs for the first click), and the link-rules check (a tsx "Cannot find module" error). Not diagnosed. The runner has no interactive console, which may be why the ConPTY ones fail; a real desktop may differ |
+| e2e-stage | **Did not run**: aborted at the start with a tsx "Cannot find module ... tsx/dist/esm/api/esm/index.mjs" error (the same error as the link-rules check above). Not diagnosed |
+| Node 22.12.0 with the bundled Windows better-sqlite3 binary | Opening a database exits with `0xC0000005` (access violation), the crash seen on Linux; `check-native` prints the plain "too old" message; `pnpm install` on 22.12.0 succeeds with no compiler. Node 22.13 was measured on Linux only |
+
+Not run anywhere on Windows: the manual terminal checks T1 to T8 below, the optional hooks step, and anything needing a real desktop, GPU or the owner's own PC.
+
 ## Why this exists
 
-Everything so far was built and tested in a Linux cloud sandbox: 2,797 unit tests and 142 end-to-end checks (a real daemon process, a real Chromium, real PTYs), with a scripted fake Claude and a simulated stage. That proves the logic and the wiring. It cannot prove the parts that depend on the user's machine: Windows paths and signals, native addons, ConPTY, real Claude Code hook payloads, the GPU, the camera, the microphone, or any game engine. This page says how to close that gap and what each step decides.
+Everything so far was built and tested in a Linux cloud sandbox: 2,799 unit tests and 142 end-to-end checks (a real daemon process, a real Chromium, real PTYs), with a scripted fake Claude and a simulated stage. That proves the logic and the wiring. It cannot prove the parts that depend on the user's machine: Windows paths and signals, native addons, ConPTY, real Claude Code hook payloads, the GPU, the camera, the microphone, or any game engine. This page says how to close that gap and what each step decides.
 
 Two ways to run it. Paste: the user runs Claude Code **on their own PC**, in a clone of this repo, using [spikes/pc/KICKOFF-PROMPT.md](../spikes/pc/KICKOFF-PROMPT.md), and pastes the results back. Zero-paste: the user enables Remote Control for a folder in the Claude desktop app (Settings, Claude Code, Remote Control), and the cloud session runs the checks itself while the user only approves prompts. Without one of the two the cloud session cannot reach the PC (it listed no computer, and the Desktop Commander available there runs inside the sandbox).
 
@@ -25,7 +45,7 @@ Two ways to run it. Paste: the user runs Claude Code **on their own PC**, in a c
 | Step | Verifies | Why it matters |
 |---|---|---|
 | (Parked) System inventory (`collect-system-info.ps1`) | GPU, driver, CUDA, VRAM, Unreal and Unity installs, build tools, Node, pnpm, claude | Picks the engine spike setup and flags missing prerequisites |
-| `pnpm install`, typecheck, tests | `better-sqlite3` and `node-pty` native addons on Windows; every package's tests on Windows. Expected: 2,797 tests pass (shared 9, agent-core 464, stage-core 1,400, daemon 924). A different count is a finding | The daemon and terminal depend on native code; paths and file locking behave differently |
+| `pnpm install`, typecheck, tests | `better-sqlite3` and `node-pty` native addons on Windows; every package's tests on Windows. Expected: 2,799 tests pass (shared 9, agent-core 464, stage-core 1,400, daemon 926). A different count is a finding | The daemon and terminal depend on native code; paths and file locking behave differently |
 | End-to-end scripts | Sign-in cookie flow, WebSocket reconnect, the embedded terminal (ConPTY, `claude.exe` lookup), the stage simulator, the memory panel. Expected: smoke 26, daemon 37, terminal 41, stage 38 (142 checks), but **five terminal checks are skipped on Windows by design** (next section) | The terminal is the highest-risk and most Windows-sensitive feature |
 | Manual terminal checks (PowerShell, below) | Process-tree kill, what happens to a terminal when the daemon is killed or its window is closed, loopback-only binding, secrets file permissions, environment scrub | These are exactly the behaviours the scripts cannot see on Windows. They decide whether the terminal is safe to leave enabled |
 | (Optional) Hooks with a real session | The real field names and delivery of Claude Code hooks; fail-open behaviour; PermissionRequest side effects | The hook monitor is built on assumptions taken from documentation (ADR 0003) |

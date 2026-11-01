@@ -12,7 +12,7 @@ Work only on branch `claude/determined-pasteur-klc0fw`. Never open a PR unless a
 
 Built and verified in a Linux sandbox: the mockup (an accepted draft), daemon, web client, Claude lanes (zero-token fake backend and the real Agent SDK backend), hook monitor, embedded terminal, the stage backend (characters, wardrobe, scene, mood, speech, memory) with a simulator stage, and two adversarial reviews with all findings closed ([docs/reviews/](docs/reviews/)).
 
-**Not verified: Windows, a live Claude, real Claude Code hook payloads, any engine, any GPU.** Say so plainly in reports. The Windows/GPU check is optional and parked ([docs/PC-BRINGUP.md](docs/PC-BRINGUP.md)): never make it a gate or end a report with it.
+**Verified on a GitHub Actions Windows runner, not the owner's PC:** `start.cmd` end to end, typecheck, smoke 26 and e2e-daemon 37 ([docs/PC-BRINGUP.md](docs/PC-BRINGUP.md), "Measured on a Windows runner", which also lists what failed there: a daemon test harness that fakes `platform: 'linux'`, one slow stage-core test, four terminal e2e checks, and the stage e2e aborting on a tsx error; none blocks the launcher). **Not verified: the owner's PC, a live Claude, real Claude Code hook payloads, any engine, any GPU.** Say so plainly in reports. The Windows/GPU check is optional and parked ([docs/PC-BRINGUP.md](docs/PC-BRINGUP.md)): never make it a gate or end a report with it.
 
 ## Layout
 
