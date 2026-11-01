@@ -137,17 +137,35 @@ jobs:
           foreach ($p in 'shared', 'agent-core', 'stage-core', 'daemon') {
             $out = pnpm --filter "@ai-assistant/$p" test 2>&1 | Out-String
             $code = $LASTEXITCODE
-            "== $p (exit $code)"
-            ($out -split "`r?`n") | Where-Object { $_ -match '^\s*(Test Files|Tests)\s' -or $_ -match '^\s*FAIL\s' } | Select-Object -First 60
-            if ($code -ne 0) { $bad++ }
+            $lines = $out -split "`r?`n"
+            Write-Host "== $p (exit $code)"
+            $lines | Where-Object { $_ -match '^\s*(Test Files|Tests)\s' } | ForEach-Object { Write-Host $_ }
+            if ($code -ne 0) {
+              $bad++
+              $failed = @($lines | Where-Object { $_ -match '^\s*FAIL\s+\S+' })
+              Write-Host 'failing tests per file:'
+              $failed | ForEach-Object { $_ -replace '^\s*FAIL\s+(\S+).*$', '$1' } | Group-Object | Sort-Object Count -Descending |
+                ForEach-Object { Write-Host ('  {0,4}  {1}' -f $_.Count, $_.Name) }
+              $start = ($lines | Select-String -Pattern 'Failed Tests' | Select-Object -First 1).LineNumber
+              if ($start) {
+                Write-Host '---- the first failures, with their errors'
+                $lines[($start - 1)..([Math]::Min($start + 90, $lines.Count - 1))] | ForEach-Object { Write-Host $_ }
+              }
+            }
           }
           if ($bad -gt 0) { exit 1 }
 
-      - name: Playwright Chromium (information)
+      - name: Playwright and its Chromium (information)
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 15
-        run: pnpm --filter '@ai-assistant/web' exec playwright install chromium
+        run: |
+          # The e2e scripts use whatever Playwright is installed globally (it is not a dependency of this repo), so install
+          # one beside the repo and point NODE_PATH at it for the next step.
+          $pw = Join-Path $env:RUNNER_TEMP 'pw'
+          npm install --prefix $pw --no-audit --no-fund playwright@1.63.0
+          & (Join-Path $pw 'node_modules\.bin\playwright.cmd') install chromium
+          Add-Content -Path $env:GITHUB_ENV -Value "NODE_PATH=$(Join-Path $pw 'node_modules')"
 
       - name: e2e scripts, one at a time (information)
         if: ${{ !cancelled() }}
