@@ -84,6 +84,8 @@ The daemon sends 52 ARKit weights per 30 fps frame (one clock, audio first). A V
 
 Unity runs on the PC only. The cloud session this repository is developed in cannot reach that PC or Unity's downloads, so the Unity project is built by a Claude Code session on the PC, driven by [spikes/unity/KICKOFF-PROMPT.md](../spikes/unity/KICKOFF-PROMPT.md). That session can use the Unity CLI (`unity`, install editors, create the project, `unity build --execute-method Builder.PerformBuild`, `unity test`) and, once the `com.unity.pipeline` package is installed in the project, drive the open Editor live (`unity status`, `unity command`). A headless CI build later needs a Unity service account in repository secrets; it is not set up.
 
+Unity work that already exists on the PC (an older clone with `unity-stage-pc`, or a Unity project elsewhere) is moved into this layout by `migrate.cmd` ([MIGRATION.md](MIGRATION.md)): the project lands in `unity/MiraStage`, its `Packages/manifest.json` points at `file:../../Packages/com.mira.stage`, and Unity layer files and `.meta` files it carried are added to the package. Continue from there rather than starting over.
+
 Two ways to start that session:
 
 1. Paste the prompt into Claude Code on the PC (steps at the top of the kickoff file). Ready now.

@@ -9,17 +9,17 @@ Zero-paste alternative: in the Claude desktop app, enable Remote Control for the
 How to start by pasting: open PowerShell, then
 
 ```powershell
-git clone --branch claude/determined-pasteur-klc0fw https://github.com/drakedreper/ai_assistant.git C:\dev\ai_assistant
-cd C:\dev\ai_assistant
+git clone --branch claude/funny-allen-fpoupb https://github.com/drakedreper/ai_assistant.git $env:USERPROFILE\Mira\ai_assistant
+cd $env:USERPROFILE\Mira\ai_assistant
 claude
 ```
 
-(or `git pull` in your existing clone) and paste the prompt. Have ready: a **VRM 1.0 model of an adult character** you are allowed to use (a VRoid Studio export is fine), and Docker Desktop or Node 22.14+ with pnpm for the backend.
+(or `git pull` in your existing clone; if an older clone already holds Unity work, move it over first with `migrate.cmd`, [docs/MIGRATION.md](../../docs/MIGRATION.md)) and paste the prompt. Have ready: a **VRM 1.0 model of an adult character** you are allowed to use (a VRoid Studio export is fine), and Docker Desktop or Node 22.14+ with pnpm for the backend.
 
 ````text
 You are building the Unity stage of a project on THIS Windows 11 PC (RTX 5070 Ti). The backend and an engine-free C# client already exist and are tested without Unity. Your job is the part that needs Unity: a Unity 6 project that connects to the backend, loads a VRM character into a dark "cerebral void" room, and lets her speak with a moving mouth. Report plainly. Do not claim anything works unless you saw it work; say "not verified" otherwise. Keep your own output short: tables and numbers, not narration.
 
-REPO: this folder, branch claude/determined-pasteur-klc0fw. Read, in this order: CLAUDE.md, docs/UNITY.md, docs/DOCKER.md, docs/adr/0008-stage-protocol-and-engine-choice.md, docs/CEREBRAL-SPACE.md, packages/shared/src/stage.ts (the contract), and the C# package unity/Packages/com.mira.stage (Runtime/*.cs, Tests~/Tests/*.cs).
+REPO: this folder, branch claude/funny-allen-fpoupb (or the branch unity-stage that scripts/migrate.ps1 made, if you are continuing earlier Unity work). Read, in this order: CLAUDE.md, docs/UNITY.md, docs/DOCKER.md, docs/adr/0008-stage-protocol-and-engine-choice.md, docs/CEREBRAL-SPACE.md, packages/shared/src/stage.ts (the contract), and the C# package unity/Packages/com.mira.stage (Runtime/*.cs, Tests~/Tests/*.cs).
 
 RULES
 1. Ask before ANY step that changes this machine beyond the repo folder, and wait for my explicit yes: installing the Unity CLI, an Editor or UniVRM (downloads), starting Docker, copying a model, creating files outside the repo, pushing. Tell me what it changes first. Signing in to Unity (unity auth login) and activating a licence I do myself: tell me the exact command and wait.

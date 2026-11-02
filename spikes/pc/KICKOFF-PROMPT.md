@@ -16,7 +16,7 @@ and paste the prompt.
 ````text
 You are checking a project on THIS Windows 11 PC. It was built in a Linux sandbox, so none of it has ever run on Windows. Find out what really happens and report it plainly. Do not fix things silently and do not claim anything works unless you saw it work. Keep your own output short: tables and numbers, not narration.
 
-REPO: https://github.com/drakedreper/ai_assistant , branch claude/determined-pasteur-klc0fw. Read CLAUDE.md first, then docs/PC-BRINGUP.md.
+REPO: https://github.com/drakedreper/ai_assistant , branch claude/funny-allen-fpoupb. Read CLAUDE.md first, then docs/PC-BRINGUP.md.
 
 RULES
 1. Read-only first. Before ANY step that changes this machine, tell me exactly what it changes and wait for my explicit yes. That includes: installing software (Node, pnpm, Visual Studio Build Tools, Playwright browsers), editing %USERPROFILE%\.claude\settings.json or any config outside the repo, and setting an API key.

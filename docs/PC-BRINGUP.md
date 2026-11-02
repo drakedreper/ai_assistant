@@ -7,7 +7,7 @@ Status: optional, updated 2026-11-01. Nothing the project needs next depends on 
 Only if you want to see the real thing run. You need Node.js 22.14 or newer and Git. No compiler: both native addons ship Windows binaries. The launcher enables pnpm itself and, after the install, checks that the database library opens a database on your Node (older 22.x crashes there, and the check says so in plain words).
 
 ```powershell
-git clone --branch claude/determined-pasteur-klc0fw https://github.com/drakedreper/ai_assistant.git
+git clone --branch claude/funny-allen-fpoupb https://github.com/drakedreper/ai_assistant.git $env:USERPROFILE\Mira\ai_assistant
 ```
 
 Then double-click `start.cmd` in the new folder (macOS, Linux and Git Bash: `scripts/start.sh`). It installs, checks the database library, builds the web app, starts the daemon and opens the app in your browser. Settings, Stage shows her and the void; Settings, Privacy, "Embedded terminals" turns the terminal on; Work, Terminal opens a shell. Everything runs with the fake Claude (no network, no tokens) until you set `CLAUDE_BACKEND=sdk`. If something fails the window stays open: the exact error text is all that is needed. `scripts/start.sh` is tested end to end. `start.cmd` runs the same steps. Its first run on the owner's PC stopped at `pnpm install` (pnpm tried to compile better-sqlite3 with node-gyp; fixed, see Risks below). Since then it has run end to end on a GitHub Actions Windows machine (next section); it has not been run on the owner's PC since the fix. Set `OPEN_BROWSER=0` first if you do not want the browser opened.

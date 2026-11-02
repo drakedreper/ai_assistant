@@ -1,11 +1,11 @@
 # Builds Mira's backend image and runs it for real, on a Linux machine with Docker, then checks it from the host's side
 # the way a browser and a Unity stage would reach it (scripts/docker-smoke.ts). The development sandbox this project is
-# written in has no Docker daemon, so THIS is where the image is verified. Pushes to the working branch only, or by hand.
+# written in has no Docker daemon, so THIS is where the image is verified. Pushes to main and the claude/* working branches, or by hand.
 name: docker
 
 on:
   push:
-    branches: [claude/determined-pasteur-klc0fw]
+    branches: [main, 'claude/**']
     paths:
       - 'Dockerfile'
       - '.dockerignore'

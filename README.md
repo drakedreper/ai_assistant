@@ -2,7 +2,7 @@
 
 A local-first personal AI assistant for a Windows 11 PC. A small 3D room on the left holds "Mira" (placeholder name), a warm and playful partner who is also a sharp secretary, and who says plainly that she is an AI. Under the room is a live chat. The rest of the screen is the stage: a daily briefing, mission control for Claude Code sessions, a second brain (an Obsidian-compatible markdown vault with Mira as its interface), life admin, finance from the user's own app "Atlas", and a re-ranked world overview. What separates it from another calendar overview is that every proactive item cites the user's own strategy or knowledge notes ("this touches your Q4 positioning").
 
-Status (2026-11-01): the mockup screens are an accepted **draft**. Built and tested in a Linux sandbox: a local daemon (loopback server, SQLite, Claude Code hook monitor, Secretary lane with a zero-token fake Claude and an Agent SDK backend), a web client, an **embedded terminal** (your own `claude` or a shell in a PTY, off until you enable it), and the **stage backend** for a live 3D assistant (characters, wardrobe, the "cerebral void" scene, mood and behaviour, speech pipeline, an engine-agnostic protocol with a simulator stage). An adversarial review of the terminal and the stage found no critical flaw and all 74 findings are closed ([docs/reviews](docs/reviews/2026-11-01-terminal-and-stage.md)). After that review I added a way to inspect and forget what she remembers (Settings, Stage), and made the database overwrite deleted rows; those are tested but were not part of the review. **Not verified:** Windows, live Claude, real Claude Code hook payloads, any game engine or GPU. Nothing here needs your GPU. Running it on Windows is optional: double-click `start.cmd` (macOS and Linux: `scripts/start.sh`) to install, build, run and open it, and see [docs/PC-BRINGUP.md](docs/PC-BRINGUP.md) for the short check prompt; the GPU, voice and engine checks are parked. Conversations with Claude are short-lived by default and carried by her stored memory, which saves tokens (`CLAUDE_CONVERSATION`). `CLAUDE.md` is the short project memory for Claude Code sessions, and `scripts/verify.sh` checks everything in one command. The long-term direction is described in [docs/CEREBRAL-SPACE.md](docs/CEREBRAL-SPACE.md).
+Status (2026-11-01): the mockup screens are an accepted **draft**. Built and tested in a Linux sandbox: a local daemon (loopback server, SQLite, Claude Code hook monitor, Secretary lane with a zero-token fake Claude and an Agent SDK backend), a web client, an **embedded terminal** (your own `claude` or a shell in a PTY, off until you enable it), and the **stage backend** for a live 3D assistant (characters, wardrobe, the "cerebral void" scene, mood and behaviour, speech pipeline, an engine-agnostic protocol with a simulator stage). An adversarial review of the terminal and the stage found no critical flaw and all 74 findings are closed ([docs/reviews](docs/reviews/2026-11-01-terminal-and-stage.md)). After that review I added a way to inspect and forget what she remembers (Settings, Stage), and made the database overwrite deleted rows; those are tested but were not part of the review. **Not verified:** Windows, live Claude, real Claude Code hook payloads, any game engine or GPU. Nothing here needs your GPU. Running it on Windows is optional: double-click `start.cmd` (macOS and Linux: `scripts/start.sh`) to install, build, run and open it, and see [docs/PC-BRINGUP.md](docs/PC-BRINGUP.md) for the short check prompt; the GPU, voice and engine checks are parked. Conversations with Claude are short-lived by default and carried by her stored memory, which saves tokens (`CLAUDE_CONVERSATION`). `CLAUDE.md` is the short project memory for Claude Code sessions, and `scripts/verify.sh` checks everything in one command. The long-term direction is described in [docs/CEREBRAL-SPACE.md](docs/CEREBRAL-SPACE.md). **Moving to the PC (2026-11-02):** the latest build is the branch `claude/funny-allen-fpoupb`; [docs/MIGRATION.md](docs/MIGRATION.md) puts everything in one folder (`%USERPROFILE%\Mira`), opens it as one VS Code workspace (`Mira.code-workspace`) and connects the Unity work you already did (`migrate.cmd`).
 
 ## Quick start
 
@@ -31,6 +31,16 @@ The daemon prints a one-time sign-in link (`http://127.0.0.1:7421/?code=...`); o
 
 With Docker Desktop running, double-click `start-docker.cmd` (macOS, Linux, Git Bash: `scripts/start-docker.sh`). It builds the image, starts the daemon and the built web app in a container, and opens the sign-in link. Unity and the browser stay on your PC and use the published port, which is bound to `127.0.0.1` only. What differs from the native run (terminals, Claude login) is in [docs/DOCKER.md](docs/DOCKER.md).
 
+### Move it to one folder on your PC (VS Code + Unity)
+
+```powershell
+git clone --branch claude/funny-allen-fpoupb https://github.com/drakedreper/ai_assistant.git $env:USERPROFILE\Mira\ai_assistant
+cd $env:USERPROFILE\Mira\ai_assistant
+.\migrate.cmd -OldClone C:\dev\ai_assistant
+```
+
+`-OldClone` is an older clone where the Unity project was built; `-UnityProject <folder>` takes a Unity project from anywhere else; `-DryRun` only reports. It merges or copies the Unity work into `unity\MiraStage` on a new local branch `unity-stage`, makes the content folder for the models, installs the dependencies and opens `Mira.code-workspace` in VS Code. It never pushes. Details and what each option does: [docs/MIGRATION.md](docs/MIGRATION.md).
+
 ### Unity (the first engine stage)
 
 The 3D room and character are built in Unity 6 (VRM 1.0), which runs on your PC and connects to the same backend, native or in Docker. What is ready is the C# client and its tests; the Unity project itself is built on the PC by a Claude Code session started from [spikes/unity/KICKOFF-PROMPT.md](spikes/unity/KICKOFF-PROMPT.md). What exists, what is tested and what is not: [docs/UNITY.md](docs/UNITY.md).
@@ -44,6 +54,8 @@ The 3D room and character are built in Unity 6 (VRM 1.0), which runs on your PC 
 | `pnpm test` | Vitest in `packages/shared` (contracts), `packages/agent-core` (lane, backends, parser), `packages/stage-core` (stage backend and conformance suite) and `apps/daemon` (security, hooks, store, WebSocket, terminal, stage) |
 | `scripts/verify.sh` | Everything in one command: typecheck, unit tests, the C# stage client (when the .NET 8 SDK is installed), build, mockup smoke test, the three end-to-end scripts and an orphan-process check, printed as a short table (`scripts/verify.sh quick` skips the browser parts) |
 | `start.cmd` / `scripts/start.sh` | Run the app from a clone in one step: install, build the web app, start the daemon (fake Claude), open the sign-in link in your browser (`OPEN_BROWSER=0` skips that) |
+| `migrate.cmd` (`scripts/migrate.ps1`) | Move to one common folder and connect existing Unity work: merges an older clone's Unity branch or copies a Unity project into `unity/MiraStage`, makes the content folder, installs, opens the VS Code workspace. `-DryRun` changes nothing. [docs/MIGRATION.md](docs/MIGRATION.md) |
+| `pwsh -File scripts/test-migrate.ps1` | End-to-end test of the migration script on throwaway clones (38 checks; Windows PowerShell 5.1 or PowerShell 7) |
 | `start-docker.cmd` / `scripts/start-docker.sh` | The same backend in a Docker container (`docker-compose.yml`, published on 127.0.0.1 only), with the sign-in link opened for you. [docs/DOCKER.md](docs/DOCKER.md) |
 | `pnpm --filter @ai-assistant/daemon exec tsx ../../scripts/docker-smoke.ts` | Checks a running compose stack from the host: port on 127.0.0.1 only, sign-in, a stage connecting over the published port, the token and data surviving a restart |
 | `pnpm --filter @ai-assistant/web e2e` | End-to-end: a real daemon process and a real browser (sign-in, live hooks, chat, approvals, reconnect, restart) |
@@ -58,6 +70,8 @@ The 3D room and character are built in Unity 6 (VRM 1.0), which runs on your PC 
 ## Repo map
 
 ```
+Mira.code-workspace       VS Code workspace: the repo, the Unity package, the Unity project and the content folder in one window
+migrate.cmd               Move to one common folder and connect existing Unity work (docs/MIGRATION.md)
 apps/
   web/                    Vite + React 19 + Tailwind 4 + Zustand (the real frontend, not a throwaway)
     src/layout/           Shell, rail, top bar, "her space" column, command palette
@@ -78,6 +92,8 @@ packages/
     src/tools.ts          The assistant's tool surface with lane and autonomy tier per tool
     src/fixtures/         Seeded mock data; read STORY.md first (ids and note paths there are contracts)
     test/                 Integrity tests for the fixtures
+unity/                    The Unity package com.mira.stage (C# stage client and its tests); the Unity project goes in unity/MiraStage
+scripts/                  Launchers, verify.sh, the migration script and its test, Docker helpers
 docs/                     Plan, architecture, ADRs, persona and privacy specs, research digests
 spikes/                   Phase 0b scripts, to be run later on the user's own Windows PC
 ```
@@ -97,11 +113,14 @@ The mockup implements it with `FixtureClient` (`apps/web/src/api/fixtureClient.t
 
 | Document | Contents |
 |---|---|
+| [docs/MIGRATION.md](docs/MIGRATION.md) | The latest build, the common-folder layout, and moving existing Unity work over (`migrate.cmd`) |
+| [docs/UNITY.md](docs/UNITY.md) | The Unity stage: what exists, what is tested, connecting, the content pack |
+| [docs/DOCKER.md](docs/DOCKER.md) | Running the backend in Docker |
 | [docs/PLAN.md](docs/PLAN.md) | Roadmap by phase, locked decisions, open items that need the user |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Daemon, Claude lanes, monitoring ingestion, stores, event envelope, security, testing |
 | [docs/PERSONA.md](docs/PERSONA.md) | Mira's persona spec: honesty, boundaries, emotion tags, AvatarEvent contract |
 | [docs/PRIVACY.md](docs/PRIVACY.md) | What leaves the PC, sensitivity labels, webcam rules, "forget" semantics |
-| [docs/adr/](docs/adr/) | Architecture decision records 0001 to 0007 |
+| [docs/adr/](docs/adr/) | Architecture decision records 0001 to 0009 |
 | [docs/research/](docs/research/) | Digests of the eight-agent research sweep, with source URLs |
 | [spikes/README.md](spikes/README.md) | The four Phase 0b release gates and how to run them on Windows |
 

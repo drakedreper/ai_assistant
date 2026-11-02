@@ -4,7 +4,8 @@
 #   scripts/verify.sh          full run (about 6 minutes): typecheck, every unit suite, the C# stage client (when dotnet is installed),
 #                              the web build, the mockup smoke test,
 #                              the three end-to-end scripts (real daemon processes, real Chromium), orphaned terminal hosts
-#   scripts/verify.sh quick    typecheck and the unit suites (and the C# client when dotnet is installed) only (about 1 to 2 minutes)
+#   scripts/verify.sh quick    typecheck and the unit suites (and the C# client when dotnet is installed, the migration
+#                              script test when pwsh is installed) only (about 1 to 2 minutes)
 #
 # Details go to .verify.log (git-ignored). Linux, macOS or Git Bash. The end-to-end scripts need Playwright's Chromium
 # (npx playwright install chromium) and are run one at a time on purpose: they start daemons on random ports.
@@ -52,6 +53,17 @@ if command -v dotnet > /dev/null 2>&1; then
   row "  c# tests" "${CS:-?}"
 else
   row "unity-stage" "SKIP (no dotnet SDK: the C# client tests did not run)"
+fi
+
+# the migration script (scripts/migrate.ps1) against throwaway clones: needs PowerShell 7 (pwsh); skipped without it
+if command -v pwsh > /dev/null 2>&1; then
+  MIG="$(mktemp)"
+  step migrate
+  if POWERSHELL_TELEMETRY_OPTOUT=1 pwsh -NoProfile -File scripts/test-migrate.ps1 > "$MIG" 2>&1; then row migrate "PASS ($(grep -c '^PASS' "$MIG") checks)"; else row migrate "FAIL (see .verify.log)"; FAIL=1; fi
+  cat "$MIG" >> "$LOG"
+  rm -f "$MIG"
+else
+  row "migrate" "SKIP (no pwsh: the migration script test did not run)"
 fi
 
 if [ "$MODE" != "quick" ]; then

@@ -1,0 +1,175 @@
+// Open this file in VS Code (File, Open Workspace from File, or `code Mira.code-workspace`). It shows the whole project in one
+// window: the repository (backend, web app, docs), the Unity package, the Unity project and the content folder with the models.
+// The expected layout on the PC is in docs/MIGRATION.md (scripts/migrate.ps1 builds it):
+//
+//   %USERPROFILE%\Mira\              the common folder
+//     ai_assistant\                  this repository (git), with this file at its root
+//       unity\Packages\com.mira.stage   the C# stage client (Unity package)
+//       unity\MiraStage\                the Unity 6 project (created on the PC; your existing Unity work goes here)
+//     content\                       the models (VRM) and other binaries, never in git (the default MIRA_CONTENT_DIR)
+//
+// A folder that does not exist yet (MiraStage before the Unity project is made, content before the migration) is shown as
+// missing; that is expected and changes nothing else.
+{
+  "folders": [
+    { "name": "Mira", "path": "." },
+    { "name": "com.mira.stage", "path": "unity/Packages/com.mira.stage" },
+    { "name": "MiraStage", "path": "unity/MiraStage" },
+    { "name": "content", "path": "../content" }
+  ],
+  "settings": {
+    // The repository root does not repeat the two Unity folders that have their own entries above (search stays complete:
+    // each root searches its own files). Unity's generated folders and .meta files are hidden, as Unity's own VS Code setup does.
+    "files.exclude": {
+      "unity/MiraStage": true,
+      "unity/Packages": true,
+      "**/node_modules": true,
+      "**/.git": true,
+      "**/Library": true,
+      "**/Temp": true,
+      "**/Logs": true,
+      "**/UserSettings": true,
+      "**/obj": true,
+      "**/bin": true,
+      "**/*.meta": true,
+      "**/*.csproj.user": true
+    },
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/dist-single": true,
+      "**/Library": true,
+      "**/Temp": true,
+      "**/Build": true,
+      "**/Builds": true,
+      "**/obj": true,
+      "**/bin": true,
+      "pnpm-lock.yaml": true,
+      "**/Tests~/golden/recorded/frames": true
+    },
+    "files.watcherExclude": {
+      "**/node_modules/**": true,
+      "**/Library/**": true,
+      "**/Temp/**": true,
+      "**/Logs/**": true,
+      "**/obj/**": true,
+      "**/bin/**": true
+    },
+    // The TypeScript the repository pins (pnpm workspace), not the one bundled with VS Code.
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "typescript.enablePromptUseWorkspaceTsdk": true,
+    // Line endings are decided by .gitattributes (CRLF for .cmd/.ps1, LF for .sh, the Dockerfile and the C# fixtures).
+    "files.insertFinalNewline": true,
+    "files.trimTrailingWhitespace": true,
+    "[markdown]": { "files.trimTrailingWhitespace": false },
+    "git.openRepositoryInParentFolders": "always",
+    "terminal.integrated.cwd": "${workspaceFolder:Mira}"
+  },
+  "extensions": {
+    "recommendations": [
+      "visualstudiotoolsforunity.vstuc",
+      "ms-dotnettools.csdevkit",
+      "ms-dotnettools.csharp",
+      "vitest.explorer",
+      "bradlc.vscode-tailwindcss",
+      "ms-azuretools.vscode-containers",
+      "anthropic.claude-code"
+    ]
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "Mira: start (native, fake Claude)",
+        "detail": "Install, build the web app, start the daemon and open the sign-in link (start.cmd / scripts/start.sh)",
+        "type": "shell",
+        "command": "./scripts/start.sh",
+        "windows": { "command": ".\\start.cmd" },
+        "options": { "cwd": "${workspaceFolder:Mira}" },
+        "isBackground": false,
+        "problemMatcher": []
+      },
+      {
+        "label": "Mira: start in Docker",
+        "detail": "The same backend in a container on 127.0.0.1 (start-docker.cmd / scripts/start-docker.sh, docs/DOCKER.md)",
+        "type": "shell",
+        "command": "./scripts/start-docker.sh",
+        "windows": { "command": ".\\start-docker.cmd" },
+        "options": { "cwd": "${workspaceFolder:Mira}" },
+        "problemMatcher": []
+      },
+      {
+        "label": "Mira: typecheck",
+        "type": "shell",
+        "command": "pnpm -r typecheck",
+        "options": { "cwd": "${workspaceFolder:Mira}" },
+        "problemMatcher": ["$tsc"],
+        "group": "build"
+      },
+      {
+        "label": "Mira: unit tests",
+        "type": "shell",
+        "command": "pnpm test",
+        "options": { "cwd": "${workspaceFolder:Mira}" },
+        "problemMatcher": [],
+        "group": "test"
+      },
+      {
+        "label": "Mira: C# stage client tests (dotnet)",
+        "detail": "165 tests over the golden fixtures and the real daemon (needs the .NET 8 SDK and pnpm install)",
+        "type": "process",
+        "command": "dotnet",
+        "args": ["test", "unity/Packages/com.mira.stage/Tests~/Tests/Mira.Stage.Tests.csproj"],
+        "options": { "cwd": "${workspaceFolder:Mira}" },
+        "problemMatcher": ["$msCompile"],
+        "group": "test"
+      },
+      {
+        "label": "Mira: verify everything (quick)",
+        "detail": "typecheck + unit tests + C# in one table (scripts/verify.sh quick; on Windows through Git Bash)",
+        "type": "process",
+        "command": "bash",
+        "args": ["scripts/verify.sh", "quick"],
+        "windows": { "command": "${env:ProgramFiles}\\Git\\bin\\bash.exe" },
+        "options": { "cwd": "${workspaceFolder:Mira}" },
+        "problemMatcher": [],
+        "group": "test"
+      },
+      {
+        "label": "Mira: migration check (dry run)",
+        "detail": "What scripts/migrate.ps1 would do, without changing anything (docs/MIGRATION.md)",
+        "type": "process",
+        "command": "pwsh",
+        "args": ["-NoProfile", "-File", "scripts/migrate.ps1", "-DryRun", "-NoOpen", "-SkipInstall"],
+        "windows": {
+          "command": "powershell.exe",
+          "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts\\migrate.ps1", "-DryRun", "-NoOpen", "-SkipInstall"]
+        },
+        "options": { "cwd": "${workspaceFolder:Mira}" },
+        "problemMatcher": []
+      }
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Attach to Unity (Editor or player)",
+        "type": "vstuc",
+        "request": "attach"
+      },
+      {
+        "name": "Daemon (fake Claude, debugger attached)",
+        "type": "node",
+        "request": "launch",
+        "cwd": "${workspaceFolder:Mira}/apps/daemon",
+        "runtimeExecutable": "node",
+        "runtimeArgs": ["--import", "tsx"],
+        "program": "${workspaceFolder:Mira}/apps/daemon/src/main.ts",
+        "env": { "CLAUDE_BACKEND": "fake", "OPEN_BROWSER": "0" },
+        "console": "integratedTerminal",
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+      }
+    ]
+  }
+}

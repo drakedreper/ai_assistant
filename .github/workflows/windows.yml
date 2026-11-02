@@ -1,17 +1,18 @@
 # Runs this project's Windows path on a real Windows machine. The project was built in a Linux sandbox, so none of it had
 # ever run on Windows. The first job does what a double-click on start.cmd does (install, check, build, start the daemon,
 # sign in over HTTP); the other steps are information (they never turn the run red) and are read by whoever is
-# checking the Windows state. Pushes to the working branch only, or by hand from the Actions tab.
+# checking the Windows state. Pushes to main and the claude/* working branches, or by hand from the Actions tab.
 name: windows
 
 on:
   push:
-    branches: [claude/determined-pasteur-klc0fw]
+    branches: [main, 'claude/**']
     paths:
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
       - 'package.json'
       - 'start.cmd'
+      - 'migrate.cmd'
       - 'scripts/**'
       - 'apps/**'
       - 'packages/**'
@@ -113,6 +114,30 @@ jobs:
           $ok = ($exchange -eq 200) -and ($api -eq 200) -and ($bytes -gt 100) -and ($page -eq 200) -and ($html -match 'id=.root.')
           if (-not $ok) { Write-Host '::error::the daemon started but the sign-in or the app did not respond as expected'; exit 1 }
           "start.cmd path OK"
+
+      # The migration script (scripts/migrate.ps1, docs/MIGRATION.md) against throwaway clones, in both shells a Windows PC
+      # may use: Windows PowerShell 5.1 (what migrate.cmd starts) and PowerShell 7. Here it copies with robocopy; elsewhere
+      # it uses Copy-Item, which the Linux sandbox tests.
+      - name: Migration script (information)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $sum = Join-Path $env:RUNNER_TEMP 'summary.txt'
+          $bad = 0
+          foreach ($shell in 'powershell.exe', 'pwsh') {
+            $out = & $shell -NoProfile -ExecutionPolicy Bypass -File scripts/test-migrate.ps1 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            $lines = $out -split "`r?`n"
+            $pass = @($lines | Where-Object { $_ -match '^PASS' }).Count
+            $fail = @($lines | Where-Object { $_ -match '^FAIL' })
+            Write-Host "== migrate with $shell (exit $code): $pass passed, $($fail.Count) failed"
+            Add-Content -Path $sum -Value "migrate ${shell}: exit $code, $pass passed, $($fail.Count) failed"
+            $fail | Select-Object -First 10 | ForEach-Object { Write-Host $_; Add-Content -Path $sum -Value ("  " + $_.Trim()) }
+            if ($code -ne 0) { $bad++; $lines | Select-Object -Last 80 | ForEach-Object { Write-Host $_ } }
+          }
+          if ($bad -gt 0) { exit 1 }
 
       - name: pnpm for the steps below
         if: ${{ !cancelled() }}

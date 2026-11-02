@@ -2,12 +2,12 @@
 # live ones that start the REAL daemon and connect to it over a real WebSocket, plus the TypeScript halves of the shared
 # fixtures. The development sandbox has no Unity and the owner's PC is not reachable, so this is the second place (after the
 # sandbox) where the Unity-facing contract is checked from a clean checkout. It does NOT build or run Unity.
-# Pushes to the working branch only, or by hand.
+# Pushes to main and the claude/* working branches, or by hand.
 name: unity-stage
 
 on:
   push:
-    branches: [claude/determined-pasteur-klc0fw]
+    branches: [main, 'claude/**']
     paths:
       - 'unity/**'
       - 'packages/shared/src/stage.ts'
