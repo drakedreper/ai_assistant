@@ -1,10 +1,10 @@
 # Moving to one common folder (VS Code + Unity)
 
-Status: written 2026-11-02. How to put the whole project in one folder on the Windows PC, open it as one VS Code workspace, and connect the Unity work you already did. `scripts/migrate.ps1` does the work; it is tested on throwaway clones (`scripts/test-migrate.ps1`, 38 checks) with PowerShell 7 in the Linux sandbox and by the Windows workflow (see "What is verified" at the end). It has not run on the owner's PC.
+Status: written 2026-11-02. How to put the whole project in one folder on the Windows PC, open it as one VS Code workspace, and connect the Unity work you already did. `scripts/migrate.ps1` does the work; it is tested on throwaway clones (`scripts/test-migrate.ps1`, 38 checks) with PowerShell 7 in the Linux sandbox and with Windows PowerShell 5.1 and PowerShell 7 on a GitHub Windows runner (see "What is verified" at the end). It has not run on the owner's PC.
 
 ## The latest build
 
-Branch **`claude/funny-allen-fpoupb`**. It continues `claude/determined-pasteur-klc0fw` (last commit `2d7d549`, 2026-11-01) and adds the fixes for the Windows test failures, this migration kit and the VS Code workspace. `main` holds only the first placeholder commit until this branch is merged. The branch `cursor/ai-cv-assistant-e49f` is a separate, older project (a CV assistant) and is not part of Mira.
+Branch **`claude/funny-allen-fpoupb`**. It continues `claude/determined-pasteur-klc0fw` (last commit `2d7d549`, 2026-11-01) and adds this migration kit, the VS Code workspace, and fixes that bring every unit suite to green on a Windows runner (the daemon's went from 506 failures to 0; all were test-side, plus one config inconsistency). `main` holds only the first placeholder commit until this branch is merged. The branch `cursor/ai-cv-assistant-e49f` is a separate, older project (a CV assistant) and is not part of Mira.
 
 What it contains: the daemon (loopback server, SQLite, Claude lanes, hook monitor, embedded terminal), the web app, the stage backend with its simulator, Docker mode, and the engine-free C# Unity package `unity/Packages/com.mira.stage` with 165 tests. The Unity project itself (`unity/MiraStage`: the room, the VRM, the Unity layer) is built on the PC; it is the "Unity work already done" this page connects.
 
@@ -96,7 +96,8 @@ git -C $env:USERPROFILE\Mira\ai_assistant remote set-url origin https://github.c
 | | how | result |
 |---|---|---|
 | The script's routes: dry run, old clone, uncommitted work, standalone project with an edited embedded package, merge conflict, rerun | `scripts/test-migrate.ps1` on throwaway clones, PowerShell 7.4 on Linux (the `Copy-Item` path) | 38 of 38; three deliberate breaks (no merge abort, overwriting an edited file, not excluding the embedded package) each failed a check |
-| The same on Windows, with Windows PowerShell 5.1 and robocopy | the "Migration script" step of `.github/workflows/windows.yml` | see the latest run of that workflow on this branch |
+| The same on Windows, with Windows PowerShell 5.1 and robocopy | the "Migration script" step of `.github/workflows/windows.yml` on a GitHub Windows runner | 38 of 38 in Windows PowerShell 5.1 and 38 of 38 in PowerShell 7 ([run](https://github.com/drakedreper/ai_assistant/actions/runs/41521369152)) |
+| The rest of the build on Windows | the same run | `start.cmd` end to end, typecheck, every unit suite green (daemon 952, stage-core 1,405, agent-core 464, shared 9), C# 165, smoke 26, e2e-daemon 37, e2e-stage 38; e2e-terminal 32 passed, 4 failed (they need a shell started in a PTY, which the runner may not give; [PC-BRINGUP.md](PC-BRINGUP.md)) |
 | The VS Code workspace | parsed as JSON; folder paths and tasks written to the documented layout | not opened in VS Code; the Unity debugger and C# Dev Kit not tried |
 
 Not verified: the owner's PC, the real old clone or Unity project, Unity opening the moved project, and VS Code with the Unity extension. The script reports what it found and what is left at every step; the report file is what to bring back if something looks wrong.
