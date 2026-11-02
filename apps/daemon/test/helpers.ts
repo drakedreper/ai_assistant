@@ -27,7 +27,9 @@ export function makeTmp(prefix = 'daemon-test-'): { dir: string; cleanup: () => 
 }
 
 export function testConfig(dataDir: string, overrides: Partial<DaemonConfig> = {}): DaemonConfig {
-  const base = loadConfig({ DATA_DIR: dataDir }, { platform: 'linux', homedir: '/home/test', exists: () => false, moduleDir: '/nowhere' })
+  // The REAL platform: dataDir is a real temporary folder, and resolving a Windows path (C:\Users\...\Temp\x) with the POSIX
+  // rules glued it onto the working directory (D:\a\...\apps\daemon\C:\Users\...), which failed 506 tests on Windows.
+  const base = loadConfig({ DATA_DIR: dataDir }, { platform: process.platform, homedir: dataDir, exists: () => false, moduleDir: '/nowhere' })
   return { ...base, port: 7421, dbFile: ':memory:', logLevel: 'silent', ...overrides }
 }
 

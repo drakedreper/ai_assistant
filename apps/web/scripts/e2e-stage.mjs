@@ -42,6 +42,18 @@ const webDir = path.resolve(here, '..')
 const root = path.resolve(webDir, '..', '..')
 const daemonDir = path.join(root, 'apps', 'daemon')
 const daemonRequire = createRequire(path.join(daemonDir, 'package.json'))
+
+/**
+ * The file URL of tsx's ESM API (`tsx/esm/api`, import condition). `daemonRequire.resolve('tsx/esm/api')` picks the
+ * CommonJS build instead, and on Node older than 22.15 (no module.registerHooks, so tsx falls back to module.register)
+ * that build registers its loader at a path that does not exist (dist/esm/api/esm/index.mjs): the script then aborts
+ * with "Cannot find module" on Node 22.14, the minimum this repository supports. Read the entry from tsx's own exports.
+ */
+function tsxEsmApiUrl() {
+  const pkgFile = daemonRequire.resolve('tsx/package.json')
+  const entry = JSON.parse(readFileSync(pkgFile, 'utf8')).exports['./esm/api'].import
+  return pathToFileURL(path.join(path.dirname(pkgFile), typeof entry === 'string' ? entry : entry.default)).href
+}
 const WebSocket = daemonRequire('ws')
 const SHOTS = path.resolve(process.env.SHOTS_DIR ?? './screenshots')
 const VERBOSE = Boolean(process.env.E2E_VERBOSE)
@@ -221,7 +233,7 @@ try {
   const webDist = buildWeb(path.join(tmp, 'web'))
 
   // The simulator comes from stage-core (TypeScript): load it the way the daemon is run, through tsx.
-  const { register } = await import(pathToFileURL(daemonRequire.resolve('tsx/esm/api')).href)
+  const { register } = await import(tsxEsmApiUrl())
   register()
   const { connectSimulator } = await import(pathToFileURL(path.join(daemonDir, 'src', 'stage', 'simClient.ts')).href)
 

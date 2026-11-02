@@ -245,7 +245,9 @@ describe('restore re-establishes a clothed state or refuses (MEDIUM: wardrobe-re
     // both outcomes really happen in this run, so the property is not vacuous
     expect(failedClosed).toBeGreaterThan(20)
     expect(repairedAndSaved).toBeGreaterThan(20)
-  })
+    // 400 full runs take about 3 s in the Linux sandbox and went past vitest's 5 s default on a GitHub Windows runner
+    // (a timeout there, not an assertion). The work is unchanged; it only gets a budget that fits a slower machine.
+  }, 60_000)
 })
 
 describe('preset tweaks are validated like any other input (LOW: wardrobe-savepreset-hostile-tweaks)', () => {

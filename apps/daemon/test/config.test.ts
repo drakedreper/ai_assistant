@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_DAEMON_PORT } from '@ai-assistant/shared'
 import { ConfigError, describeConfig, loadConfig, resolveDataDir } from '../src/config'
+import { makeTmp, testConfig } from './helpers'
 
 const linux = { platform: 'linux' as const, homedir: '/home/ada', exists: () => false, moduleDir: '/repo/apps/daemon/src' }
 const win = { platform: 'win32' as const, homedir: 'C:\\Users\\ada', exists: () => false, moduleDir: 'C:\\repo\\apps\\daemon\\src' }
@@ -93,5 +94,19 @@ describe('loadConfig', () => {
     expect(d.staleIdleMs).toBe(6 * 3_600_000)
     const c = loadConfig({ STALE_RUNNING_MINUTES: '3' }, linux)
     expect(c.staleRunningMs).toBe(180_000)
+  })
+})
+
+describe('testConfig (the harness most daemon tests build on)', () => {
+  // On Windows the harness once resolved its real temporary folder with POSIX rules, which turned
+  // C:\Users\...\Temp\daemon-test-x into <cwd>\C:\Users\... and failed 506 tests there (ENOENT on the secrets file).
+  // On Linux and macOS this passes either way; the Windows workflow is what proves it.
+  it('keeps the real temporary data directory exactly as given, on every platform', () => {
+    const tmp = makeTmp()
+    try {
+      expect(testConfig(tmp.dir).dataDir).toBe(tmp.dir)
+    } finally {
+      tmp.cleanup()
+    }
   })
 })

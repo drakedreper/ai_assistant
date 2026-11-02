@@ -920,8 +920,12 @@ setInterval(() => {}, 1000)
 
   // Node-level checks of the link rules (the browser run above covers the wiring, these cover the cases).
   await check('the link rules: only plain http(s) without credentials or hidden characters, shown in their punycode form', async () => {
+    // tsx's ESM API, read from its exports: resolving 'tsx/esm/api' with require picks the CommonJS build, which on Node
+    // older than 22.15 registers its loader at a path that does not exist (the same fix and reason as in e2e-stage.mjs).
     const daemonRequire = createRequire(path.join(daemonDir, 'package.json'))
-    const api = await import(pathToFileURL(daemonRequire.resolve('tsx/esm/api')).href)
+    const tsxPkg = daemonRequire.resolve('tsx/package.json')
+    const tsxEntry = JSON.parse(readFileSync(tsxPkg, 'utf8')).exports['./esm/api'].import
+    const api = await import(pathToFileURL(path.join(path.dirname(tsxPkg), typeof tsxEntry === 'string' ? tsxEntry : tsxEntry.default)).href)
     const mod = await api.tsImport(path.join(webDir, 'src', 'api', 'terminalClient.ts'), import.meta.url)
     const ok = (u) => mod.safeLinkTarget(u)
     if (ok('https://example.com/a?b=1#c')?.href !== 'https://example.com/a?b=1#c') throw new Error('a plain link is refused')
