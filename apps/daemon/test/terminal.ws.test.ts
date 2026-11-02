@@ -474,6 +474,10 @@ describe('control frames and text frames are bounded (CONTROL-FRAME-BACKPRESSURE
     const deadline = Date.now() + 4000
     while (h.daemon.terminals.upgrade.stats().droppedSlow === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
     expect(h.daemon.terminals.upgrade.stats().droppedSlow).toBeGreaterThan(0)
+    // The drop terminates the socket and the detach follows on its 'close' event, which on Windows arrives a moment later
+    // than on Linux: wait for it, within a bound, instead of reading it in the same tick.
+    const detachBy = Date.now() + 2000
+    while (h.daemon.terminals.service.isAttached(id) && Date.now() < detachBy) await new Promise((r) => setTimeout(r, 10))
     expect(h.daemon.terminals.service.isAttached(id)).toBe(false)
     expect(h.daemon.terminals.service.get(id)).toMatchObject({ state: 'running' }) // the terminal itself is untouched
   })

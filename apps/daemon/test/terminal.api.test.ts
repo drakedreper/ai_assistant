@@ -83,9 +83,13 @@ describe('the disabled gate', () => {
     const a = await makeTerminalHarness({ dataDir: tmp.dir, dbFile, enable: true })
     await a.daemon.stop()
     const b = await makeTerminalHarness({ dataDir: tmp.dir, dbFile, enable: false })
-    open.push(b)
-    expect(b.daemon.terminals.enabled()).toBe(true)
-    tmp.cleanup()
+    try {
+      expect(b.daemon.terminals.enabled()).toBe(true)
+    } finally {
+      // stop the daemon (it closes app.db) BEFORE removing its folder: Windows cannot delete an open file (EBUSY)
+      await b.cleanup()
+      tmp.cleanup()
+    }
   })
 })
 
