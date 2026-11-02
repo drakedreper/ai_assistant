@@ -10,7 +10,8 @@ import { createTestBudget, makeTmp } from './helpers'
 
 const cleanups: Array<() => void> = []
 afterEach(() => {
-  for (const c of cleanups.splice(0)) c()
+  // last in, first out: close a database before removing the folder it lives in (Windows cannot delete an open file)
+  for (const c of cleanups.splice(0).reverse()) c()
 })
 
 function memStore(): Store {

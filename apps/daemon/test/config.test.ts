@@ -83,6 +83,14 @@ describe('loadConfig', () => {
     expect(custom.webDist).toBe('/srv/web')
   })
 
+  it('finds the web build with the path rules of the platform it is given, whatever machine runs it', () => {
+    // The mirror of the Windows failure: a config for one platform must not depend on the host's own path module.
+    const c = loadConfig({}, { ...win, exists: (p) => p === 'C:\\repo\\apps\\web\\dist\\index.html' })
+    expect(c.webDist).toBe('C:\\repo\\apps\\web\\dist')
+    const custom = loadConfig({ WEB_DIST: 'D:\\srv\\web' }, { ...win, exists: (p) => p === 'D:\\srv\\web\\index.html' })
+    expect(custom.webDist).toBe('D:\\srv\\web')
+  })
+
   it('accepts custom dev origins and normalises them', () => {
     const c = loadConfig({ DEV_ORIGINS: 'http://localhost:4000/, http://127.0.0.1:4000' }, linux)
     expect(c.allowedDevOrigins).toEqual(['http://localhost:4000', 'http://127.0.0.1:4000'])

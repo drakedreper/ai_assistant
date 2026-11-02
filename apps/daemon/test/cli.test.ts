@@ -42,8 +42,9 @@ function setup() {
       out: (s) => void (out += s),
       err: (s) => void (err += s),
       now: () => new Date('2026-11-02T10:11:12.345Z'),
-      platform: 'linux',
-      homedir: '/home/nobody',
+      // real temporary folders: the real platform's path rules (POSIX rules broke every path on Windows)
+      platform: process.platform,
+      homedir: t.dir,
     }
     const code = runHooksCli(args, { ...env, ...over }, io)
     return { code, out, err }

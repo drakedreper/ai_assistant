@@ -1,6 +1,6 @@
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { isInside } from '../src/static'
 import { json, makeDaemon, makeTmp, type TestDaemon } from './helpers'
@@ -176,11 +176,13 @@ describe('path traversal', () => {
   })
 
   it('isInside is strict about sibling directories that share a prefix', () => {
-    expect(isInside('/srv/dist', '/srv/dist')).toBe(true)
-    expect(isInside('/srv/dist', '/srv/dist/a/b')).toBe(true)
-    expect(isInside('/srv/dist', '/srv/dist-evil/a')).toBe(false)
-    expect(isInside('/srv/dist', '/srv')).toBe(false)
-    expect(isInside('/srv/dist/', '/srv/dist/a')).toBe(true)
+    // Native resolved paths, as the handler passes them (on Windows: D:\\srv\\dist, with backslashes).
+    const dist = resolve('/srv/dist')
+    expect(isInside(dist, dist)).toBe(true)
+    expect(isInside(dist, join(dist, 'a', 'b'))).toBe(true)
+    expect(isInside(dist, resolve('/srv/dist-evil/a'))).toBe(false)
+    expect(isInside(dist, resolve('/srv'))).toBe(false)
+    expect(isInside(dist + sep, join(dist, 'a'))).toBe(true)
   })
 })
 

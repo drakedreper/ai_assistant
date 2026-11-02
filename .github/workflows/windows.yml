@@ -180,9 +180,20 @@ jobs:
               Write-Host 'failing tests per file:'
               $failed | ForEach-Object { $_ -replace '^\s*FAIL\s+(\S+).*$', '$1' } | Group-Object | Sort-Object Count -Descending |
                 ForEach-Object { Write-Host ('  {0,4}  {1}' -f $_.Count, $_.Name) }
+              # every failing test with the first line of its error (the full first failures follow)
               $start = ($lines | Select-String -Pattern 'Failed Tests' | Select-Object -First 1).LineNumber
               if ($start) {
-                Write-Host '---- the first failures, with their errors'
+                Write-Host '---- each failing test and the first line of its error'
+                for ($i = $start; $i -lt $lines.Count; $i++) {
+                  if ($lines[$i] -match '^\s*FAIL\s+(\S+.*)$') {
+                    $name = $Matches[1].Trim()
+                    $err = ''
+                    for ($j = $i + 1; $j -lt [Math]::Min($i + 6, $lines.Count); $j++) { if ($lines[$j].Trim()) { $err = $lines[$j].Trim(); break } }
+                    Write-Host "  $name"
+                    Write-Host "      $($err.Substring(0, [Math]::Min(220, $err.Length)))"
+                  }
+                }
+                Write-Host '---- the first failures, in full'
                 $lines[($start - 1)..([Math]::Min($start + 90, $lines.Count - 1))] | ForEach-Object { Write-Host $_ }
               }
             }

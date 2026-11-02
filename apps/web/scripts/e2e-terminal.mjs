@@ -926,7 +926,8 @@ setInterval(() => {}, 1000)
     const tsxPkg = daemonRequire.resolve('tsx/package.json')
     const tsxEntry = JSON.parse(readFileSync(tsxPkg, 'utf8')).exports['./esm/api'].import
     const api = await import(pathToFileURL(path.join(path.dirname(tsxPkg), typeof tsxEntry === 'string' ? tsxEntry : tsxEntry.default)).href)
-    const mod = await api.tsImport(path.join(webDir, 'src', 'api', 'terminalClient.ts'), import.meta.url)
+    // a file URL, not a path: on Windows the ESM loader reads D:\... as a URL with the scheme 'd:' and refuses it
+    const mod = await api.tsImport(pathToFileURL(path.join(webDir, 'src', 'api', 'terminalClient.ts')).href, import.meta.url)
     const ok = (u) => mod.safeLinkTarget(u)
     if (ok('https://example.com/a?b=1#c')?.href !== 'https://example.com/a?b=1#c') throw new Error('a plain link is refused')
     if (ok('https://аpple.com/x')?.host !== 'xn--pple-43d.com') throw new Error('a look-alike host is not shown in punycode')

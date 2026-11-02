@@ -238,8 +238,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, ctx: Partial<Co
   // (DAEMON_HOST, DAEMON_BIND and the like are not read at all).
   const containerMode = parseBool(env.MIRA_CONTAINER)
 
-  const webCandidate = env.WEB_DIST?.trim() ? p.resolve(env.WEB_DIST.trim()) : nodePath.resolve(c.moduleDir, '..', '..', 'web', 'dist')
-  const webDist = c.exists(nodePath.join(webCandidate, 'index.html')) ? webCandidate : undefined
+  // The same path rules as everything else here (p, the platform in the context): mixing in the native module made a
+  // config built for one platform depend on the machine it was built on. In the real daemon both are the same.
+  const webCandidate = env.WEB_DIST?.trim() ? p.resolve(env.WEB_DIST.trim()) : p.resolve(c.moduleDir, '..', '..', 'web', 'dist')
+  const webDist = c.exists(p.join(webCandidate, 'index.html')) ? webCandidate : undefined
 
   const apiKey = env.ANTHROPIC_API_KEY?.trim() || undefined
   const claudeExecutable = env.CLAUDE_EXECUTABLE?.trim() || undefined

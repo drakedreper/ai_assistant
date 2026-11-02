@@ -107,7 +107,8 @@ export interface StageDaemon {
 /** A daemon with the real lane (fake Claude backend), the stage on, a fast tick and fast fake speech. */
 export async function makeStageDaemon(o: StageDaemonOptions): Promise<StageDaemon> {
   mkdirSync(o.dataDir, { recursive: true })
-  const base = loadConfig({ DATA_DIR: o.dataDir }, { platform: 'linux', homedir: '/home/test', exists: () => false, moduleDir: '/nowhere' })
+  // The REAL platform: o.dataDir is a real folder, and POSIX rules on a Windows path glue it onto the working directory.
+  const base = loadConfig({ DATA_DIR: o.dataDir }, { platform: process.platform, homedir: o.dataDir, exists: () => false, moduleDir: '/nowhere' })
   const config: DaemonConfig = {
     ...base,
     port: 0,
